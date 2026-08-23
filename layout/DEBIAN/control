@@ -1,0 +1,9 @@
+Package: com.dts.freefireth.externalesp
+Name: External ESP Free Fire
+Version: 1.0
+Section: Tweaks
+Depends: firmware (>= 14.0)
+Architecture: iphoneos-arm
+Author: LuisePog
+Maintainer: LuisePog
+Description: External ESP Free Fire

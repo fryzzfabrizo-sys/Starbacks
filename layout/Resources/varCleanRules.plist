@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>/var</key>
+	<dict>
+		<key>default</key>
+		<string>none</string>
+		<key>whitelist</key>
+		<array>
+			<string>.DocumentRevisions-V100</string>
+			<string>.fseventsd</string>
+			<string>.overprovisioning_file</string>
+			<string>Keychains</string>
+			<string>MobileDevice</string>
+			<string>buddy</string>
+			<string>datamigrator</string>
+			<string>folders</string>
+			<string>keybags</string>
+			<string>networkd</string>
+			<string>root</string>
+			<string>tmp</string>
+			<string>Managed Preferences</string>
+			<string>MobileSoftwareUpdate</string>
+			<string>containers</string>
+			<string>db</string>
+			<string>hardware</string>
+			<string>mobile</string>
+			<string>preferences</string>
+			<string>run</string>
+			<string>vm</string>
+			<string>MobileAsset</string>
+			<string>audit</string>
+			<string>empty</string>
+			<string>installd</string>
+			<string>log</string>
+			<string>logs</string>
+			<string>msgs</string>
+			<string>protected</string>
+			<string>select</string>
+			<string>wireless</string>
+		</array>
+		<key>blacklist</key>
+		<array>
+			<string>jb</string>
+			<string>stash</string>
+			<string>alternatives</string>
+			<string>ap</string>
+			<string>apt</string>
+			<string>bin</string>
+			<string>bzip2</string>
+			<string>cache</string>
+			<string>dpkg</string>
+			<string>etc</string>
+			<string>gzip</string>
+			<string>local</string>
+			<string>lib</string>
+			<string>Lib</string>
+			<string>libexec</string>
+			<string>Library</string>
+			<string>opt</string>
+			<string>private</string>
+			<string>sbin</string>
+			<string>share</string>
+			<string>ssh</string>
+			<string>sudo</string>
+			<string>usr</string>
+			<string>var</string>
+			<string>zsh</string>
+		</array>
+	</dict>
+</dict>
+</plist>
+
