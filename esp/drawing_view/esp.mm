@@ -710,38 +710,12 @@ void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
     float angle        = Quaternion::Angle(current, q);
     if (angle < 0.0005f) return;
 
-    float t;
+    // ========== МГНОВЕННЫЙ АИМБОТ ==========
+    float t = 1.0f; // Всегда мгновенно
+    // ======================================
 
-    // 🟢 TĂNG TỐC ĐỘ AIM GẤP ĐÔI: Khi bắn, aim ngay lập tức (1.0f)
-    bool isFiring = get_IsFiring(player);
-    
-    if (isAimRage || isFiring) {
-        t = 1.0f; // 🟢 Aim ngay lập tức khi bắn (Gấp đôi so với trước)
-    } else {
-        // 🟢 Nhân hệ số 2.0 vào speed để nhanh gấp đôi khi di chuyển chuột
-        float speed = Clamp01f(aimSpeed) * 2.0f; 
-        speed = fminf(speed, 1.0f); // Giới hạn max 1.0 để đảm bảo mượt
-
-        t = speed * speed;
-        
-        float centerBoost = 1.0f - Clamp01f(angle / 30.0f);
-        t += centerBoost * 0.20f; 
-        
-        t = fmaxf(0.05f, fminf(t, 1.0f)); 
-    }
-
-    // 🟢 SỬA LỖI COMPILE: Bỏ đoạn damping phức tạp, chỉ dùng Slerp cơ bản
-    Quaternion out;
-    if (t >= 0.95f) {
-        // Nếu gần đạt target, set thẳng để tránh rung
-        out = q;
-    } else {
-        // Slerp mượt
-        out = Quaternion::Normalized(Quaternion::Slerp(current, q, t));
-    }
-    
-    WriteAddr<Quaternion>(player + kAimRotation,    out);
-    WriteAddr<Quaternion>(player + kAimRotationAux, out);
+    WriteAddr<Quaternion>(player + kAimRotation, q);
+    WriteAddr<Quaternion>(player + kAimRotationAux, q);
 }
 
 //static inline uint32_t get_VisibleFlags(uint64_t player) {
