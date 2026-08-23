@@ -1,0 +1,43 @@
+name: Build Extern
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Restore Theos cache
+        id: theos-cache
+        uses: actions/cache@v4
+        with:
+          path: theos
+          key: ${{ runner.os }}-theos-${{ hashFiles('Makefile') }}
+          restore-keys: |
+            ${{ runner.os }}-theos-
+
+      - name: Set up Theos
+        uses: Randomblock1/theos-action@v1.5
+        with:
+          theos-dir: ${{ github.workspace }}/theos
+
+      - name: Build package
+        run: make package FINALPACKAGE=1
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Extern-${{ github.sha }}
+          path: packages/*
+          if-no-files-found: error
+          retention-days: 14
