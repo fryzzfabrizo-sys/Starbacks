@@ -717,14 +717,13 @@ void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
     WriteAddr<Quaternion>(player + kAimRotation, q);
     WriteAddr<Quaternion>(player + kAimRotationAux, q);
 }
-
-//static inline uint32_t get_VisibleFlags(uint64_t player) {
-   // uint64_t arr = ReadAddr<uint64_t>(player + kVisibleObj);
-    //return isVaildPtr(arr) ? ReadAddr<uint32_t>(arr + kVisibleObjFlags) : 0;
-//}
-//bool get_IsVisible(uint64_t p)                      { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleDynamicPVS) != 0; }
-//bool get_IsVisibleByFlag(uint64_t p, uint32_t flag) { return isVaildPtr(p) && (get_VisibleFlags(p) & flag) != 0; }
-//bool get_IsFPPVisible(uint64_t p)                   { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleFPPMask) == kISVisibleFPPMask; }
+static inline uint32_t get_VisibleFlags(uint64_t player) {
+    uint64_t arr = ReadAddr<uint64_t>(player + kVisibleObj);
+    return isVaildPtr(arr) ? ReadAddr<uint32_t>(arr + kVisibleObjFlags) : 0;
+}
+bool get_IsVisible(uint64_t p)                      { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleDynamicPVS) != 0; }
+bool get_IsVisibleByFlag(uint64_t p, uint32_t flag) { return isVaildPtr(p) && (get_VisibleFlags(p) & flag) != 0; }
+bool get_IsFPPVisible(uint64_t p)                   { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleFPPMask) == kISVisibleFPPMask; }
 bool get_IsFiring(uint64_t p)   { return isVaildPtr(p) && GetDataUInt16(p, 21) == 2; }
 bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) != 0; }
 
