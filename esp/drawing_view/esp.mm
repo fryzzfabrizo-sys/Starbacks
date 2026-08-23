@@ -710,20 +710,47 @@ void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
     float angle        = Quaternion::Angle(current, q);
     if (angle < 0.0005f) return;
 
-    // ========== МГНОВЕННЫЙ АИМБОТ ==========
-    float t = 1.0f; // Всегда мгновенно
-    // ======================================
+    float t;
 
-    WriteAddr<Quaternion>(player + kAimRotation, q);
-    WriteAddr<Quaternion>(player + kAimRotationAux, q);
+    // 🟢 TĂNG TỐC ĐỘ AIM GẤP ĐÔI: Khi bắn, aim ngay lập tức (1.0f)
+    bool isFiring = get_IsFiring(player);
+    
+    if (isAimRage || isFiring) {
+        t = 1.0f; // 🟢 Aim ngay lập tức khi bắn (Gấp đôi so với trước)
+    } else {
+        // 🟢 Nhân hệ số 2.0 vào speed để nhanh gấp đôi khi di chuyển chuột
+        float speed = Clamp01f(aimSpeed) * 2.0f; 
+        speed = fminf(speed, 1.0f); // Giới hạn max 1.0 để đảm bảo mượt
+
+        t = speed * speed;
+        
+        float centerBoost = 1.0f - Clamp01f(angle / 30.0f);
+        t += centerBoost * 0.20f; 
+        
+        t = fmaxf(0.05f, fminf(t, 1.0f)); 
+    }
+
+    // 🟢 SỬA LỖI COMPILE: Bỏ đoạn damping phức tạp, chỉ dùng Slerp cơ bản
+    Quaternion out;
+    if (t >= 0.95f) {
+        // Nếu gần đạt target, set thẳng để tránh rung
+        out = q;
+    } else {
+        // Slerp mượt
+        out = Quaternion::Normalized(Quaternion::Slerp(current, q, t));
+    }
+    
+    WriteAddr<Quaternion>(player + kAimRotation,    out);
+    WriteAddr<Quaternion>(player + kAimRotationAux, out);
 }
-static inline uint32_t get_VisibleFlags(uint64_t player) {
-    uint64_t arr = ReadAddr<uint64_t>(player + kVisibleObj);
-    return isVaildPtr(arr) ? ReadAddr<uint32_t>(arr + kVisibleObjFlags) : 0;
-}
-bool get_IsVisible(uint64_t p)                      { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleDynamicPVS) != 0; }
-bool get_IsVisibleByFlag(uint64_t p, uint32_t flag) { return isVaildPtr(p) && (get_VisibleFlags(p) & flag) != 0; }
-bool get_IsFPPVisible(uint64_t p)                   { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleFPPMask) == kISVisibleFPPMask; }
+
+//static inline uint32_t get_VisibleFlags(uint64_t player) {
+   // uint64_t arr = ReadAddr<uint64_t>(player + kVisibleObj);
+    //return isVaildPtr(arr) ? ReadAddr<uint32_t>(arr + kVisibleObjFlags) : 0;
+//}
+//bool get_IsVisible(uint64_t p)                      { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleDynamicPVS) != 0; }
+//bool get_IsVisibleByFlag(uint64_t p, uint32_t flag) { return isVaildPtr(p) && (get_VisibleFlags(p) & flag) != 0; }
+//bool get_IsFPPVisible(uint64_t p)                   { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleFPPMask) == kISVisibleFPPMask; }
 bool get_IsFiring(uint64_t p)   { return isVaildPtr(p) && GetDataUInt16(p, 21) == 2; }
 bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) != 0; }
 
