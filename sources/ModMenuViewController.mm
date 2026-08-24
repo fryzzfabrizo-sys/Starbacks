@@ -518,7 +518,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         y = createRow(@"Product", @"TIPA FFExternal KTIEN IOS", y);
         
         UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(startX, y + 12, rowW, 16)];
-        foot.text = @"Build v2.0.2 — Dedicated for FreeFire";
+        foot.text = @"Build v2.0.2 — Starbacks HUD";
         foot.font = [UIFont italicSystemFontOfSize:10];
         foot.textColor = kColorMuted;
         foot.textAlignment = NSTextAlignmentCenter;
