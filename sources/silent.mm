@@ -1,6 +1,7 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
 #import "mahoa.h"
+#include <cmath>
 
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
@@ -34,6 +35,17 @@ void RunSilentAim() {
         targetPos.y - ammoBase.y,
         targetPos.z - ammoBase.z
     };
+
+    const float lengthSquared =
+        direction.x * direction.x +
+        direction.y * direction.y +
+        direction.z * direction.z;
+    if (lengthSquared <= 0.0001f) return;
+
+    const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+    direction.x *= inverseLength;
+    direction.y *= inverseLength;
+    direction.z *= inverseLength;
 
     WriteAddr<Vector3>(hitObjInfo + 0x40, direction);
     WriteAddr<Vector3>(hitObjInfo + 0x28, targetPos);
