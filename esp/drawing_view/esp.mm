@@ -888,7 +888,7 @@ Vector3 aimPos = headPos;
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
-            if (!isAimCheckVisible && !aimVis)    valid = NO;
+            if (isAimCheckVisible && !aimVis)     valid = NO;
 
             if (valid) {
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix,
