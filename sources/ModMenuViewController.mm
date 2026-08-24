@@ -612,7 +612,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             @[ @"Silent Aim", @"SilentAim" ],
             @[ @"Ignore Bot", @"AimIgnoreBot" ],
             @[ @"Ignore Knocked", @"AimIgnoreKnock" ],
-            @[ @"Aim Line Speed", @"AimCheckVisible" ],
+            @[ @"Visible Check", @"AimCheckVisible" ],
             @[ @"HUD AUX BUTTON", @"__section__" ],
             @[ @"Float AIM Btn", (NSString *)NSSENCRYPT("FloatAimBtn") ],
         ];
