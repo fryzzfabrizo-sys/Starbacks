@@ -852,7 +852,7 @@ if(BackJump) {
     float    bestScore    = FLT_MAX;
     float    bestDistance = FLT_MAX;
 
-    const float aimFovSq  = isAimbot ? aimFov * aimFov : 0.0f;
+    const float aimFovSq  = (isAimbot || aimsilent1) ? aimFov * aimFov : 0.0f;
     const float safeDist  = fmaxf(aimDistance, 1.0f);
     const float safeFovSq = fmaxf(aimFovSq, 1.0f);
     const uint64_t base   = entriesArr + kIl2CppArrayItems;
@@ -884,7 +884,7 @@ Vector3 aimPos = headPos;
 
         bool    espVis   = aimVis || isKnocked;
 
-        if (isAimbot && dis <= aimDistance) {
+        if ((isAimbot || aimsilent1) && dis <= aimDistance) {
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
