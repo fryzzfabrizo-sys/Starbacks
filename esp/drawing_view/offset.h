@@ -39,10 +39,11 @@
 #define kAimRotationAux         0x5BC
 #define kIsFiring               0x770
 
-// Visible: Player.DBBGJDEAKPM (BitArrayBoolean) → BitArray.m_Value → & ISVISIBLE_DynamicPVS
-#define kVisibleBitArray        0xA40   // protected BitArrayBoolean DBBGJDEAKPM
-#define kBitArray_mValue        0x10    // protected uint m_Value (BitArray base)
-#define kISVisibleDynamicPVS    1048576 // ISVISIBLE_DynamicPVS = 0x100000
+#define _0x27276BC 0x708// protected AvatarManager m_AvatarManager; // 0x620 protected AvatarManager FOGJNGDMJKJ; // 0x710
+
+#define _0x28726BD 0x138// internal IUmaAvatar m_Avatar; // 0x118 internal IUmaAvatar EEAGBKBMBLD; // 0x128
+
+#define _0x2872DCF 0x101// private bool IsVisible; // 0x101
 
 
 #define kMainCameraTransform    0x380
