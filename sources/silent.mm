@@ -28,7 +28,7 @@ static std::atomic<bool> g_silentThreadStarted{false};
 static void SilentAimWorker() {
     const uint64_t hitObjectOffsets[] = {0xDC8, 0xDD0, 0xA90, 0xAA0};
     while (true) {
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        std::this_thread::sleep_for(std::chrono::microseconds(30));
         if (!g_silentData.load(std::memory_order_acquire)) continue;
 
         uint64_t localPlayer;
