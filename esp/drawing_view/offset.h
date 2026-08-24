@@ -45,10 +45,12 @@
 
 #define _0x2872DCF 0x101// private bool IsVisible; // 0x101
 
-// Real LOS visible — Player.DBBGJDEAKPM BitArrayBoolean + ISVISIBLE_DynamicPVS
-#define kVisibleBitArray     0xA40
-#define kBitArray_mValue     0x10
-#define kISVisibleDynamicPVS 1048576
+// Player.DBBGJDEAKPM (BitArrayBoolean) — видимость и состояние игрока
+#define kVisibleBitArray     0xA40   // protected BitArrayBoolean DBBGJDEAKPM
+#define kBitArray_mValue     0x10    // BitArray.m_Value (uint32 bitmask)
+#define kISVisibleAlive      32      // ISVISIBLE_ALIVE — жив/валиден
+#define kISVisibleCamera     1       // ISVISIBLE_CAMERA — в frustum камеры
+#define kISVisibleDynamicPVS 1048576 // ISVISIBLE_DynamicPVS — сетевой PVS (не LOS)
 
 
 #define kMainCameraTransform    0x380
