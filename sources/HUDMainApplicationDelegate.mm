@@ -151,7 +151,6 @@ BOOL HUDFloatButtonHandleTouch(CGPoint screenPoint, UITouchPhase phase, NSIntege
     _sharedHUDDelegate = self;
 
     // ─── Silent Aim: khởi động background thread ──────────────────
-    InitSilentAimThread();
 
     // Auto Layout căn đều toàn màn hình cho cả ESP và Menu
     [NSLayoutConstraint activateConstraints:@[
