@@ -47,12 +47,13 @@ uint64_t CameraMain(uint64_t matchgame) {
 
 bool getIsVisible(uint64_t playerPawn) {
     if (!isVaildPtr(playerPawn)) return false;
-    if (get_CurHP(playerPawn) <= 0) return false;
-    // Player.DBBGJDEAKPM (BitArrayBoolean) — реальный LOS через DynamicPVS
     uint64_t bitArray = ReadAddr<uint64_t>(playerPawn + kVisibleBitArray);
     if (!isVaildPtr(bitArray)) return false;
     uint32_t flags = ReadAddr<uint32_t>(bitArray + kBitArray_mValue);
-    return (flags & kISVisibleDynamicPVS) != 0;
+    // ISVISIBLE_ALIVE=32: снимается при смерти — надёжный dead/ghost фильтр
+    if (!(flags & kISVisibleAlive)) return false;
+    // ISVISIBLE_CAMERA=1: игрок в camera frustum (Unity culling)
+    return (flags & kISVisibleCamera) != 0;
 }
 
 static void TipaReadMatrix16(uint64_t addr, float *out) {
