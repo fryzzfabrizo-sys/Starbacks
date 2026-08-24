@@ -45,6 +45,11 @@
 
 #define _0x2872DCF 0x101// private bool IsVisible; // 0x101
 
+// Real LOS visible — Player.DBBGJDEAKPM BitArrayBoolean + ISVISIBLE_DynamicPVS
+#define kVisibleBitArray     0xA40
+#define kBitArray_mValue     0x10
+#define kISVisibleDynamicPVS 1048576
+
 
 #define kMainCameraTransform    0x380
 #define kMyPhysXData            0x1B80
