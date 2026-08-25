@@ -1,5 +1,6 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
+#import "../esp/drawing_view/offset.h"
 #import "mahoa.h"
 #include <cmath>
 
