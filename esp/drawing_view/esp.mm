@@ -605,7 +605,7 @@ ApplyPath(self.linePlayerLayer,
 
         if (stats.inMatch) {
             CGMutablePathRef fovPath = CGPathCreateMutable();
-            BOOL hasFov = RenderFOVCirclePath(fovPath, vw, vh, (isAimbot && isShowFov), aimFov);
+            BOOL hasFov = RenderFOVCirclePath(fovPath, vw, vh, ((isAimbot || aimsilent1) && isShowFov), aimFov);
             self.fovLayer.path = hasFov ? fovPath : nil;
             CGPathRelease(fovPath);
 
