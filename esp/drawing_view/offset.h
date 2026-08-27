@@ -45,6 +45,12 @@
 
 #define _0x2872DCF 0x101// private bool IsVisible; // 0x101
 
+// BitArrayBoolean visibility — Player.DBBGJDEAKPM (OB54 confirmed)
+#define kVisibleBitArray     0xA40   // protected BitArrayBoolean DBBGJDEAKPM
+#define kBitArray_mValue     0x10    // BitArray.m_Value (uint32)
+#define kISVisibleAlive      32      // ISVISIBLE_ALIVE — player is alive/valid
+#define kISVisibleCamera     1       // ISVISIBLE_CAMERA — in camera frustum
+
 
 #define kMainCameraTransform    0x380
 #define kMyPhysXData            0x1B80
@@ -75,4 +81,4 @@
 #define kShootNoReload          0xD9    // public bool ShootNoReload
 #define kFastFireOff            0x208  // Tốc độ bắn (Fast Fire)
 #define kFollowCamera            0x628   // LocalPlayer -> FollowCamera
-#define kFOVOffset               0x70 
+#define kFOVOffset               0x70
