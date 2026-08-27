@@ -899,8 +899,11 @@ Vector3 aimPos = headPos;
                     float dy = w2s.y - center.y;
                     float dSq = dx * dx + dy * dy;
 
-                    if (dSq <= aimFovSq) {
-                        float cn = dSq / safeFovSq;
+                    // Silent: выбираем лучшую цель без ограничения FOV
+                    // Aimbot: только в пределах FOV
+                    bool inFov = (dSq <= aimFovSq);
+                    if (inFov || (aimsilent1 && !isAimbot)) {
+                        float cn = inFov ? dSq / safeFovSq : 1.0f;
                         float dn = dis  / safeDist;
                         float score;
 
