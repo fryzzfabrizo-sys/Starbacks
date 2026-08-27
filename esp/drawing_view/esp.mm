@@ -871,7 +871,7 @@ if(BackJump) {
         if (IsZeroVec(footPos)) continue;
 
         float dis = Vector3::Distance(myLoc, footPos);
-        if (dis > 400.0f) continue;
+        if (dis > 500.0f) continue;  // Увеличено для 360 градусов
 
         Vector3 headPos  = getPositionExt(getHead(pawn));
 
@@ -899,21 +899,30 @@ Vector3 aimPos = headPos;
                     float dy = w2s.y - center.y;
                     float dSq = dx * dx + dy * dy;
 
-                    // Silent: выбираем лучшую цель без ограничения FOV
+                    // Silent: 360 градусов без ограничения FOV
                     // Aimbot: только в пределах FOV
                     bool inFov = (dSq <= aimFovSq);
-                    if (inFov || (aimsilent1 && !isAimbot)) {
-                        float cn = inFov ? dSq / safeFovSq : 1.0f;
-                        float dn = dis  / safeDist;
+                    bool silentMode = (aimsilent1 && !isAimbot);
+                    
+                    if (inFov || silentMode) {
+                        float cn = 0.0f;
+                        float dn = dis / safeDist;
                         float score;
-
-                        if (aimTargetMode == 0)
-                            score = cn * 0.85f + dn * 0.15f;
-                        else if (aimTargetMode == 1)
-                            score = fminf((float)hp / 200.0f, 1.5f) * 0.65f
-                                    + cn * 0.25f + dn * 0.10f;
-                        else
-                            score = dn * 0.75f + cn * 0.25f;
+                        
+                        if (silentMode) {
+                            // Для Silent Aim: 360 градусов, только дистанция
+                            score = dn;
+                        } else {
+                            // Для Aimbot: FOV + дистанция
+                            cn = dSq / safeFovSq;
+                            if (aimTargetMode == 0)
+                                score = cn * 0.85f + dn * 0.15f;
+                            else if (aimTargetMode == 1)
+                                score = fminf((float)hp / 200.0f, 1.5f) * 0.65f
+                                        + cn * 0.25f + dn * 0.10f;
+                            else
+                                score = dn * 0.75f + cn * 0.25f;
+                        }
 
                         if (pawn == gAimLockTarget) score *= 0.80f;
 
