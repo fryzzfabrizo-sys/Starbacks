@@ -693,6 +693,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 
         y = [self addSegmentedRow:@"Trigger Mode" key:@"TriggerMode" y:y width:rowW];
         y = [self addSegmentedRow:@"Aim Target Lock" key:@"AimPos" y:y width:rowW];
+        y = [self addSegmentedRow:@"Aim Target Mode" key:@"AimTargetMode" y:y width:rowW];
         y += 6;
 
         UILabel *sec2 = [[UILabel alloc] initWithFrame:CGRectMake(10, y + 3, rowW, 16)];
@@ -792,6 +793,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     if ([key isEqualToString:@"box"]) return @[ @"2D Box", @"Corner" ];
     if ([key isEqualToString:@"TriggerMode"]) return @[ @"Auto", @"Fire", @"Scope", @"Combo" ];
     if ([key isEqualToString:@"AimPos"]) return @[ @"Head", @"Neck", @"Chest" ];
+    if ([key isEqualToString:@"AimTargetMode"]) return @[ @"Crosshair", @"Distance", @"HP" ];
     return @[];
 }
 
