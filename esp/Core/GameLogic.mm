@@ -47,21 +47,15 @@ uint64_t CameraMain(uint64_t matchgame) {
 
 bool getIsVisible(uint64_t playerPawn) {
     if (!isVaildPtr(playerPawn)) return false;
-
-    // HP guard — мертвые/вышедшие игроки через DataPool
     if (get_CurHP(playerPawn) <= 0) return false;
 
-    // BitArrayBoolean DBBGJDEAKPM — visibility bitmask игры (OB54: 0xA40)
-    uint64_t bitArray = ReadAddr<uint64_t>(playerPawn + kVisibleBitArray);
-    if (!isVaildPtr(bitArray)) return false;
+    uint64_t avatarMgr = ReadAddr<uint64_t>(playerPawn + _0x27276BC);
+    if (avatarMgr < 0x100000000ULL || avatarMgr > 0x0000FFFFFFFFFFFFULL) return true;
 
-    uint32_t flags = ReadAddr<uint32_t>(bitArray + kBitArray_mValue);
+    uint64_t umaAvatar = ReadAddr<uint64_t>(avatarMgr + _0x28726BD);
+    if (umaAvatar < 0x100000000ULL || umaAvatar > 0x0000FFFFFFFFFFFFULL) return true;
 
-    // ALIVE = 32: сбрасывается при смерти — надёжный dead filter
-    if (!(flags & kISVisibleAlive)) return false;
-
-    // CAMERA = 1: Unity camera frustum + occlusion culling
-    return (flags & kISVisibleCamera) != 0;
+    return ReadAddr<bool>(umaAvatar + _0x2872DCF);
 }
 
 static void TipaReadMatrix16(uint64_t addr, float *out) {
