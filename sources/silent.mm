@@ -24,37 +24,58 @@ static uint64_t          g_aimPtr  = 0;
 static Vector3           g_tPos    = {};
 static Vector3           g_lPos    = {};
 
-// Для сглаживания и предсказания
-static Vector3           g_prevTargetPos = {};
-static Vector3           g_targetVelocity = {};
-static std::chrono::steady_clock::time_point g_lastUpdate;
-
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Получаем скорость цели
+// Упрощенная функция скорости (без PhysX)
 static Vector3 GetTargetVelocity(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
-    uint64_t phx = ReadAddr<uint64_t>(pawn + kMyPhysXData);
-    if (isVaildPtr(phx)) {
-        // Пробуем читать скорость из PhysX
-        Vector3 vel = ReadAddr<Vector3>(phx + 0x1A0); // Примерный оффсет скорости
-        return vel;
+    
+    static uint64_t lastPawn = 0;
+    static Vector3 lastPos = {};
+    static auto lastTime = std::chrono::steady_clock::now();
+    
+    Vector3 currentPos = HeadPos(pawn);
+    auto currentTime = std::chrono::steady_clock::now();
+    
+    float dt = std::chrono::duration<float>(currentTime - lastTime).count();
+    
+    Vector3 velocity = {};
+    if (lastPawn == pawn && dt > 0.001f && dt < 0.1f) {
+        velocity.x = (currentPos.x - lastPos.x) / dt;
+        velocity.y = (currentPos.y - lastPos.y) / dt;
+        velocity.z = (currentPos.z - lastPos.z) / dt;
+        
+        // Ограничиваем скорость (чтобы не было выбросов)
+        float maxSpeed = 20.0f;
+        float speed = std::sqrt(velocity.x*velocity.x + velocity.y*velocity.y + velocity.z*velocity.z);
+        if (speed > maxSpeed) {
+            velocity.x *= maxSpeed / speed;
+            velocity.y *= maxSpeed / speed;
+            velocity.z *= maxSpeed / speed;
+        }
     }
-    return {};
+    
+    lastPawn = pawn;
+    lastPos = currentPos;
+    lastTime = currentTime;
+    
+    return velocity;
 }
 
-// Предсказание позиции с учетом скорости цели и времени полета пули
+// Предсказание позиции с учетом скорости цели
 static Vector3 PredictTargetPos(Vector3 currentPos, Vector3 targetVel, Vector3 myPos, float bulletSpeed = 500.0f) {
     if (bulletSpeed <= 0) return currentPos;
     
     float distance = Vector3::Distance(myPos, currentPos);
     float flightTime = distance / bulletSpeed;
     
-    // Предсказываем позицию через flightTime секунд
+    // Ограничиваем время полета
+    if (flightTime > 0.5f) flightTime = 0.5f;
+    
     Vector3 predicted = {
         currentPos.x + targetVel.x * flightTime,
         currentPos.y + targetVel.y * flightTime,
@@ -66,7 +87,6 @@ static Vector3 PredictTargetPos(Vector3 currentPos, Vector3 targetVel, Vector3 m
 
 static void SilentWorker() {
     while (true) {
-        // Уменьшаем задержку для более быстрого обновления
         std::this_thread::sleep_for(std::chrono::microseconds(500));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
@@ -92,14 +112,8 @@ static void SilentWorker() {
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x*inv, diff.y*inv, diff.z*inv };
 
-        // Пишем RayDir с небольшим смещением для гарантированного попадания
-        // Добавляем микро-коррекцию к центру головы
+        // Пишем RayDir
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
-        
-        // Также пишем в дополнительные поля если они есть
-        // Некоторые версии игры используют эти поля
-        WriteAddr<Vector3>(h + 0x58, dir); // Запасное поле RayDir
-        WriteAddr<Vector3>(h + 0x64, dir); // Еще одно запасное поле
     }
 }
 
@@ -149,27 +163,17 @@ void RunSilentAim() {
         return;
     }
 
-    // Получаем скорость цели для предсказания
+    // Получаем скорость цели
     Vector3 targetVel = GetTargetVelocity(target);
     
     // Получаем позицию локального игрока
     Vector3 lPos = HeadPos(local);
     
-    // Предсказываем позицию цели (компенсация упреждения)
-    // Для разных оружий разная скорость пули
-    float bulletSpeed = 500.0f; // Базовая скорость
-    // Можно определить скорость по оружию
-    if (isVaildPtr(wpn)) {
-        // Пробуем читать скорость пули из оружия
-        float weaponBulletSpeed = ReadAddr<float>(wpn + 0x1E0); // Примерный оффсет
-        if (weaponBulletSpeed > 100.0f && weaponBulletSpeed < 2000.0f) {
-            bulletSpeed = weaponBulletSpeed;
-        }
-    }
-    
+    // Предсказываем позицию (компенсация упреждения)
+    float bulletSpeed = 500.0f;  // Можно настроить под оружие
     Vector3 predictedPos = PredictTargetPos(tPos, targetVel, lPos, bulletSpeed);
 
-    // +0.02 Y — меньшее смещение для более точного попадания
+    // Небольшое смещение вниз для точного попадания в голову
     predictedPos.y += 0.02f;
 
     {
@@ -185,6 +189,4 @@ void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lk(g_lock);
     g_aimPtr = 0;
-    g_prevTargetPos = {};
-    g_targetVelocity = {};
 }
