@@ -12,7 +12,7 @@ static constexpr uint64_t kPlayer_AimRotation    = 0x5AC; // Quaternion <MDCADLI
 static constexpr uint64_t kPlayer_AuxAimRotation = 0x5BC; // Quaternion <MPNEBFFFAMP>
 static constexpr uint64_t kWpn_CostAmmo          = 0x7B8;
 
-struct Quaternion { float x, y, z, w; };
+
 
 static inline bool isValidIOSPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
