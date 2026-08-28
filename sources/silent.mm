@@ -17,13 +17,11 @@ static constexpr uint64_t kHit_StartPos        = 0x4C;
 static constexpr uint64_t kHit_Distance        = 0x5C;
 static constexpr uint64_t kWpn_CostAmmo        = 0x7B8;
 
-static std::mutex        g_lock;
-static std::atomic<bool> g_hasData{false};
-static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr = 0;
-static uint64_t          g_local  = 0;
-static Vector3           g_tPos   = {};
-static Vector3           g_lPos   = {};
+static std::atomic<bool>     g_hasData{false};
+static std::atomic<bool>     g_started{false};
+static std::atomic<uint64_t> g_aimPtr {0};
+static std::atomic<uint64_t> g_target {0};  // цель — читаем позицию в треде
+static std::atomic<uint64_t> g_local  {0};
 
 static inline bool isValidIOSPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
@@ -40,19 +38,21 @@ static void SilentWorker() {
         std::this_thread::sleep_for(std::chrono::microseconds(1));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
-        uint64_t h;
-        Vector3  tPos, lPos;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
-        }
-        if (!isValidIOSPtr(h)) continue;
+        uint64_t h      = g_aimPtr.load(std::memory_order_relaxed);
+        uint64_t target = g_target.load(std::memory_order_relaxed);
+        uint64_t local  = g_local.load(std::memory_order_relaxed);
+
+        if (!isValidIOSPtr(h) || !isVaildPtr(target)) continue;
+
+        // Позиция головы читается ЗДЕСЬ — свежая на каждые 1µs
+        // Только 2 read'а: getHead + getPositionExt
+        Vector3 tPos = HeadPos(target);
+        if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) continue;
+        tPos.y += 0.05f;
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-            origin = lPos;
+            origin = HeadPos(local);
 
         Vector3 diff  = { tPos.x-origin.x, tPos.y-origin.y, tPos.z-origin.z };
         float   lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
@@ -78,6 +78,7 @@ void RunSilentAim() {
 
     if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
         g_hasData.store(false, std::memory_order_release);
+        g_aimPtr.store(0, std::memory_order_relaxed);
         return;
     }
 
@@ -85,43 +86,34 @@ void RunSilentAim() {
     uint64_t target = g_SilentBestTarget;
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
+        g_aimPtr.store(0, std::memory_order_relaxed);
         return;
     }
 
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         g_hasData.store(false, std::memory_order_release);
+        g_aimPtr.store(0, std::memory_order_relaxed);
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!isValidIOSPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = 0;
+        g_aimPtr.store(0, std::memory_order_relaxed);
         return;
     }
 
-    Vector3 tPos = HeadPos(target);
-    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-    tPos.y += 0.05f;
-
-    {
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_local  = local;
-        g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
-    }
-    g_hasData.store(true, std::memory_order_release);
+    // Обновляем атомарно — тред читает без блокировки
+    g_aimPtr.store(aimPtr, std::memory_order_relaxed);
+    g_target.store(target, std::memory_order_relaxed);
+    g_local .store(local,  std::memory_order_relaxed);
+    g_hasData.store(true,  std::memory_order_release);
 }
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
-    g_local  = 0;
+    g_aimPtr.store(0, std::memory_order_relaxed);
+    g_target.store(0, std::memory_order_relaxed);
+    g_local .store(0, std::memory_order_relaxed);
 }
