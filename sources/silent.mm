@@ -2,17 +2,26 @@
 #import "../esp/drawing_view/esp.h"
 #import "mahoa.h"
 #include <cmath>
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <thread>
 
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// OB54: m_AimRotation backing field (подтверждено OB53→OB54 сдвиг -8)
-static constexpr uint64_t kPlayer_AimRotation    = 0x5AC; // Quaternion <MDCADLIAJIH>
-static constexpr uint64_t kPlayer_AuxAimRotation = 0x5BC; // Quaternion <MPNEBFFFAMP>
-static constexpr uint64_t kWpn_CostAmmo          = 0x7B8;
+// OB54 offsets (подтверждено OB53 dump + Il2CppGetFieldOffset из txt)
+static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8; // GEGFCFDGGGP = m_LastAimingInfoFromWeapon
+static constexpr uint64_t kHit_RayDir         = 0x40;  // NHKKHPLFMNG — НЕ нормализуем!
+static constexpr uint64_t kHit_StartPos        = 0x4C;  // BOGOIAMJFDN
+static constexpr uint64_t kWpn_CostAmmo        = 0x7B8;
 
-
+static std::atomic<bool>     g_hasData{false};
+static std::atomic<bool>     g_started{false};
+static std::atomic<uint64_t> g_aimPtr {0};
+static std::atomic<uint64_t> g_target {0};
+static std::atomic<uint64_t> g_local  {0};
 
 static inline bool isValidIOSPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
@@ -24,101 +33,84 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Unity LookRotation: строим Quaternion из forward вектора
-// forward должен быть нормализован
-static Quaternion LookRotation(Vector3 forward, Vector3 up = {0.0f, 1.0f, 0.0f}) {
-    // Построение ortho basis
-    Vector3 f = forward;
-    float fLen = std::sqrt(f.x*f.x + f.y*f.y + f.z*f.z);
-    if (fLen < 1e-6f) return {0.0f, 0.0f, 0.0f, 1.0f};
-    f.x /= fLen; f.y /= fLen; f.z /= fLen;
+static void SilentWorker() {
+    while (true) {
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
+        if (!g_hasData.load(std::memory_order_acquire)) continue;
 
-    // right = up × forward
-    Vector3 r = {
-        up.y*f.z - up.z*f.y,
-        up.z*f.x - up.x*f.z,
-        up.x*f.y - up.y*f.x
-    };
-    float rLen = std::sqrt(r.x*r.x + r.y*r.y + r.z*r.z);
-    if (rLen < 1e-6f) {
-        r = {1.0f, 0.0f, 0.0f};
-    } else {
-        r.x /= rLen; r.y /= rLen; r.z /= rLen;
+        uint64_t h      = g_aimPtr.load(std::memory_order_relaxed);
+        uint64_t target = g_target.load(std::memory_order_relaxed);
+        uint64_t local  = g_local.load(std::memory_order_relaxed);
+        if (!isValidIOSPtr(h) || !isVaildPtr(target)) continue;
+
+        // Позиция головы — свежая каждую итерацию
+        Vector3 tPos = HeadPos(target);
+        if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) continue;
+        tPos.y += 0.05f;
+
+        // Читаем StartPos из hitObject (откуда летит пуля)
+        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+            origin = HeadPos(local);
+
+        // RAW направление — НЕ нормализуем (как во всех рабочих impl)
+        Vector3 dir = {
+            tPos.x - origin.x,
+            tPos.y - origin.y,
+            tPos.z - origin.z
+        };
+
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
-
-    // actual up = forward × right
-    Vector3 u = {
-        f.y*r.z - f.z*r.y,
-        f.z*r.x - f.x*r.z,
-        f.x*r.y - f.y*r.x
-    };
-
-    // Rotation matrix → Quaternion
-    float m00=r.x, m01=r.y, m02=r.z;
-    float m10=u.x, m11=u.y, m12=u.z;
-    float m20=f.x, m21=f.y, m22=f.z;
-
-    float tr = m00 + m11 + m22;
-    Quaternion q;
-    if (tr > 0.0f) {
-        float s = std::sqrt(tr + 1.0f) * 2.0f;
-        q.w = 0.25f * s;
-        q.x = (m12 - m21) / s;
-        q.y = (m20 - m02) / s;
-        q.z = (m01 - m10) / s;
-    } else if (m00 > m11 && m00 > m22) {
-        float s = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f;
-        q.w = (m12 - m21) / s;
-        q.x = 0.25f * s;
-        q.y = (m01 + m10) / s;
-        q.z = (m20 + m02) / s;
-    } else if (m11 > m22) {
-        float s = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f;
-        q.w = (m20 - m02) / s;
-        q.x = (m01 + m10) / s;
-        q.y = 0.25f * s;
-        q.z = (m12 + m21) / s;
-    } else {
-        float s = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f;
-        q.w = (m01 - m10) / s;
-        q.x = (m20 + m02) / s;
-        q.y = (m12 + m21) / s;
-        q.z = 0.25f * s;
-    }
-    return q;
 }
 
-void InitSilentAimThread() {}
+void InitSilentAimThread() {
+    bool exp = false;
+    if (g_started.compare_exchange_strong(exp, true))
+        std::thread(SilentWorker).detach();
+}
 
 void RunSilentAim() {
-    if (!aimsilent1 || !isVaildPtr(cachedMatch)) return;
+    InitSilentAimThread();
+
+    if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
+        g_hasData.store(false, std::memory_order_release);
+        g_aimPtr.store(0, std::memory_order_relaxed);
+        return;
+    }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
-    if (!isVaildPtr(local) || !isVaildPtr(target)) return;
+    if (!isVaildPtr(local) || !isVaildPtr(target)) {
+        g_hasData.store(false, std::memory_order_release);
+        g_aimPtr.store(0, std::memory_order_relaxed);
+        return;
+    }
 
     // Гранаты / IceWall
     uint64_t wpn = WeaponOnHand(local);
-    if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) return;
+    if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
+        g_hasData.store(false, std::memory_order_release);
+        g_aimPtr.store(0, std::memory_order_relaxed);
+        return;
+    }
 
-    Vector3 headPos   = HeadPos(target);
-    Vector3 localPos  = HeadPos(local);
-    if (headPos.x == 0.0f && headPos.y == 0.0f && headPos.z == 0.0f) return;
-    headPos.y += 0.05f;
+    uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
+    if (!isValidIOSPtr(aimPtr)) {
+        g_hasData.store(false, std::memory_order_release);
+        g_aimPtr.store(0, std::memory_order_relaxed);
+        return;
+    }
 
-    // Направление от игрока к голове врага
-    Vector3 forward = {
-        headPos.x - localPos.x,
-        headPos.y - localPos.y,
-        headPos.z - localPos.z
-    };
-
-    // Строим Quaternion и пишем в m_AimRotation и m_AuxAimRotation
-    Quaternion q = LookRotation(forward);
-    WriteAddr<Quaternion>(local + kPlayer_AimRotation,    q);
-    WriteAddr<Quaternion>(local + kPlayer_AuxAimRotation, q);
+    g_aimPtr.store(aimPtr, std::memory_order_relaxed);
+    g_target.store(target, std::memory_order_relaxed);
+    g_local .store(local,  std::memory_order_relaxed);
+    g_hasData.store(true,  std::memory_order_release);
 }
 
 void ResetSilentAim() {
-    // При выключении — ничего не делаем, игра сама восстановит ротацию
+    g_hasData.store(false, std::memory_order_release);
+    g_aimPtr.store(0,  std::memory_order_relaxed);
+    g_target.store(0,  std::memory_order_relaxed);
+    g_local .store(0,  std::memory_order_relaxed);
 }
