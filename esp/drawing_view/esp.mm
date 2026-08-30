@@ -2,7 +2,7 @@
 #import "ESPPrefs.h"
 #import "../drawing_view/offset.h"
 #import "mahoa.h"
-#import "../../sources/silent.h"          // <-- ДОБАВЛЕНО: для ResetSilentAim, RunSilentAim
+#import "../../sources/silent.h"
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #import <notify.h>
@@ -703,17 +703,16 @@ bool get_IsKnockedDown(uint64_t player) {
     return ReadAddr<uint8_t>(player + kKnocked) != 0;
 }
 
-// ===== НОВАЯ РАБОТАЮЩАЯ ФУНКЦИЯ ВИДИМОСТИ (без подчёркивания) =====
-bool getIsVisible(uint64_t player) {
+// ===== НОВАЯ РАБОТАЮЩАЯ ФУНКЦИЯ ВИДИМОСТИ (static inline, чтобы избежать дублирования) =====
+static inline bool getIsVisible(uint64_t player) {
     if (!isVaildPtr(player)) return false;
-    // Используем оффсеты из offset.h
     uint64_t bitArray = ReadAddr<uint64_t>(player + kVisibleBitArray);
     if (!isVaildPtr(bitArray)) return false;
     uint32_t flags = ReadAddr<uint32_t>(bitArray + kBitArray_mValue);
     // Проверяем флаг ISVISIBLE_CAMERA (1)
     return (flags & kISVisibleCamera) != 0;
 }
-// ================================================================
+// =========================================================================================
 
 void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
     if (!isVaildPtr(player)) return;
@@ -907,7 +906,7 @@ Vector3 aimPos = headPos;
 
         bool    isKnocked = get_IsKnockedDown(pawn);
         
-        // ===== ВЫЗЫВАЕМ НОВУЮ ФУНКЦИЮ (без подчёркивания) =====
+        // ===== ВЫЗЫВАЕМ НОВУЮ СТАТИЧЕСКУЮ ФУНКЦИЮ =====
         bool aimVis = getIsVisible(pawn);
 
         bool    espVis   = aimVis || isKnocked;
