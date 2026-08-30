@@ -703,16 +703,17 @@ bool get_IsKnockedDown(uint64_t player) {
     return ReadAddr<uint8_t>(player + kKnocked) != 0;
 }
 
-// ===== НОВАЯ РАБОТАЮЩАЯ ФУНКЦИЯ ВИДИМОСТИ =====
-bool get_IsVisible(uint64_t player) {
+// ===== НОВАЯ РАБОТАЮЩАЯ ФУНКЦИЯ ВИДИМОСТИ (без подчёркивания) =====
+bool getIsVisible(uint64_t player) {
     if (!isVaildPtr(player)) return false;
+    // Используем оффсеты из offset.h
     uint64_t bitArray = ReadAddr<uint64_t>(player + kVisibleBitArray);
     if (!isVaildPtr(bitArray)) return false;
     uint32_t flags = ReadAddr<uint32_t>(bitArray + kBitArray_mValue);
-    // Используем флаг ISVISIBLE_CAMERA (1) – этого достаточно для определения видимости
+    // Проверяем флаг ISVISIBLE_CAMERA (1)
     return (flags & kISVisibleCamera) != 0;
 }
-// ================================================
+// ================================================================
 
 void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
     if (!isVaildPtr(player)) return;
@@ -755,6 +756,13 @@ void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
     WriteAddr<Quaternion>(player + kAimRotationAux, out);
 }
 
+//static inline uint32_t get_VisibleFlags(uint64_t player) {
+   // uint64_t arr = ReadAddr<uint64_t>(player + kVisibleObj);
+    //return isVaildPtr(arr) ? ReadAddr<uint32_t>(arr + kVisibleObjFlags) : 0;
+//}
+//bool get_IsVisible(uint64_t p)                      { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleDynamicPVS) != 0; }
+//bool get_IsVisibleByFlag(uint64_t p, uint32_t flag) { return isVaildPtr(p) && (get_VisibleFlags(p) & flag) != 0; }
+//bool get_IsFPPVisible(uint64_t p)                   { return isVaildPtr(p) && (get_VisibleFlags(p) & kISVisibleFPPMask) == kISVisibleFPPMask; }
 bool get_IsFiring(uint64_t p)   { return isVaildPtr(p) && GetDataUInt16(p, 21) == 2; }
 bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) != 0; }
 
@@ -899,7 +907,8 @@ Vector3 aimPos = headPos;
 
         bool    isKnocked = get_IsKnockedDown(pawn);
         
-        bool aimVis = get_IsVisible(pawn);   // теперь используем новую рабочую функцию
+        // ===== ВЫЗЫВАЕМ НОВУЮ ФУНКЦИЮ (без подчёркивания) =====
+        bool aimVis = getIsVisible(pawn);
 
         bool    espVis   = aimVis || isKnocked;
 
