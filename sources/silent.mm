@@ -1,6 +1,6 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
-#import "../esp/drawing_view/offset.h"   // оффсеты словаря игроков
+#import "../esp/drawing_view/offset.h"
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
@@ -100,7 +100,6 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
-// ===== СБРОС СОСТОЯНИЯ (определён ДО RunSilentAim) =====
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     g_aimPtr.store(0,  std::memory_order_relaxed);
@@ -111,6 +110,7 @@ void ResetSilentAim() {
 void RunSilentAim() {
     static uint64_t lastMatch = 0;
 
+    // 1. Получаем свежий матч каждый раз (не полагаемся на устаревший cachedMatch)
     if (Moudule_Base == (uint64_t)-1) {
         ResetSilentAim();
         return;
@@ -126,11 +126,11 @@ void RunSilentAim() {
         return;
     }
 
-    // Смена матча – сброс
+    // 2. Если матч сменился – сброс
     if (currentMatch != lastMatch) {
         ResetSilentAim();
         lastMatch = currentMatch;
-        cachedMatch = currentMatch;
+        cachedMatch = currentMatch; // обновляем глобальную для других мест
     }
 
     InitSilentAimThread();
@@ -143,7 +143,7 @@ void RunSilentAim() {
     uint64_t local = getLocalPlayer(currentMatch);
     uint64_t target = g_SilentBestTarget;
 
-    // Проверка, что цель действительно в этом матче
+    // 3. Проверяем, что цель принадлежит текущему матчу
     if (!isVaildPtr(target) || !IsPlayerInMatch(target, currentMatch)) {
         g_SilentBestTarget = 0;
         ResetSilentAim();
@@ -155,7 +155,7 @@ void RunSilentAim() {
         return;
     }
 
-    // Проверка оружия (гранаты / IceWall)
+    // 4. Проверка оружия (гранаты / IceWall)
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         ResetSilentAim();
@@ -168,6 +168,7 @@ void RunSilentAim() {
         return;
     }
 
+    // 5. Обновить данные для рабочего потока
     g_aimPtr.store(aimPtr, std::memory_order_relaxed);
     g_target.store(target, std::memory_order_relaxed);
     g_local .store(local,  std::memory_order_relaxed);
