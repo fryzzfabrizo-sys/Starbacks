@@ -1,6 +1,6 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
-#import "../esp/drawing_view/offset.h"   // <-- ключевой импорт для оффсетов
+#import "../esp/drawing_view/offset.h"   // оффсеты словаря игроков
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
@@ -13,7 +13,7 @@ extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 extern uint64_t Moudule_Base;
 
-// OB54 offsets (подтверждено OB53 dump + Il2CppGetFieldOffset из txt)
+// OB54 offsets
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
@@ -35,7 +35,7 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Проверка принадлежности игрока текущему матчу (использует макросы из offset.h)
+// Проверка, что игрок принадлежит текущему матчу (использует макросы из offset.h)
 static bool IsPlayerInMatch(uint64_t player, uint64_t match) {
     if (!isVaildPtr(match) || !isVaildPtr(player)) return false;
     uint64_t playerDict = ReadAddr<uint64_t>(match + kMatchPlayerDict);
@@ -66,7 +66,7 @@ static void SilentWorker() {
         uint64_t local  = g_local.load(std::memory_order_relaxed);
         if (!isValidIOSPtr(h) || !isVaildPtr(target)) continue;
 
-        // Доп. проверка: цель и локальный игрок живы
+        // Доп. проверка – цель и локальный игрок живы
         if (get_CurHP(target) <= 0) {
             g_hasData.store(false, std::memory_order_release);
             continue;
@@ -100,10 +100,17 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
+// ===== СБРОС СОСТОЯНИЯ (определён ДО RunSilentAim) =====
+void ResetSilentAim() {
+    g_hasData.store(false, std::memory_order_release);
+    g_aimPtr.store(0,  std::memory_order_relaxed);
+    g_target.store(0,  std::memory_order_relaxed);
+    g_local .store(0,  std::memory_order_relaxed);
+}
+
 void RunSilentAim() {
     static uint64_t lastMatch = 0;
 
-    // 1. Получить актуальный матч
     if (Moudule_Base == (uint64_t)-1) {
         ResetSilentAim();
         return;
@@ -119,7 +126,7 @@ void RunSilentAim() {
         return;
     }
 
-    // 2. Если матч сменился – сбросить состояние
+    // Смена матча – сброс
     if (currentMatch != lastMatch) {
         ResetSilentAim();
         lastMatch = currentMatch;
@@ -136,7 +143,7 @@ void RunSilentAim() {
     uint64_t local = getLocalPlayer(currentMatch);
     uint64_t target = g_SilentBestTarget;
 
-    // 3. Проверить, что цель принадлежит текущему матчу
+    // Проверка, что цель действительно в этом матче
     if (!isVaildPtr(target) || !IsPlayerInMatch(target, currentMatch)) {
         g_SilentBestTarget = 0;
         ResetSilentAim();
@@ -148,7 +155,7 @@ void RunSilentAim() {
         return;
     }
 
-    // 4. Проверка оружия (гранаты / IceWall)
+    // Проверка оружия (гранаты / IceWall)
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         ResetSilentAim();
@@ -165,11 +172,4 @@ void RunSilentAim() {
     g_target.store(target, std::memory_order_relaxed);
     g_local .store(local,  std::memory_order_relaxed);
     g_hasData.store(true,  std::memory_order_release);
-}
-
-void ResetSilentAim() {
-    g_hasData.store(false, std::memory_order_release);
-    g_aimPtr.store(0,  std::memory_order_relaxed);
-    g_target.store(0,  std::memory_order_relaxed);
-    g_local .store(0,  std::memory_order_relaxed);
 }
