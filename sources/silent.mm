@@ -1,12 +1,13 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
 #import "mahoa.h"
+
 #include <cmath>
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <queue>
 
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
@@ -14,12 +15,18 @@ extern bool     aimsilent1;
 
 // OB54 iOS 64-bit
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
-static constexpr uint64_t kPlayer_IsAiming    = 0x4A0;
-static constexpr uint64_t kHit_RayDir         = 0x40;
-static constexpr uint64_t kHit_StartPos       = 0x4C;
-static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
+static constexpr uint64_t kPlayer_IsAiming    = 0x4A0;  // больше не используется
+static constexpr uint64_t kHit_RayDir        = 0x40;
+static constexpr uint64_t kHit_StartPos      = 0x4C;
+static constexpr uint64_t kWpn_CostAmmo      = 0x7B8;
+
+
+// ============================================================
+// STATE
+// ============================================================
 
 struct SilentState {
+    uint64_t match  = 0;
     uint64_t aimPtr = 0;
     uint64_t local  = 0;
     uint64_t target = 0;
@@ -28,13 +35,16 @@ struct SilentState {
 static std::mutex              g_lock;
 static std::condition_variable g_cv;
 
-static std::atomic<bool> g_hasData{false};
-static std::atomic<bool> g_started{false};
-static std::atomic<bool> g_stop{false};
-
-static SilentState g_state{};
+static std::queue<SilentState> g_queue;          // очередь состояний
+static std::atomic<bool>       g_started{false};
+static std::atomic<bool>       g_stop{false};
 
 static std::thread g_worker;
+
+
+// ============================================================
+// VALIDATION
+// ============================================================
 
 static inline bool isValidIOSPtr(uint64_t p) {
     return p >= 0x100000000ULL &&
@@ -53,16 +63,22 @@ static inline bool isZeroVector(const Vector3& v) {
            v.z == 0.0f;
 }
 
+
+// ============================================================
+// HEAD POSITION
+// ============================================================
+
 static Vector3 HeadPos(uint64_t pawn) {
+
     if (!isVaildPtr(pawn))
         return {};
 
-    uint64_t t = getHead(pawn);
+    uint64_t head = getHead(pawn);
 
-    if (!isVaildPtr(t))
+    if (!isVaildPtr(head))
         return {};
 
-    Vector3 pos = getPositionExt(t);
+    Vector3 pos = getPositionExt(head);
 
     if (!isValidVector(pos))
         return {};
@@ -70,58 +86,130 @@ static Vector3 HeadPos(uint64_t pawn) {
     return pos;
 }
 
+
+// ============================================================
+// CLEAR STATE
+// ============================================================
+
 static void ClearSilentState() {
+
     {
         std::lock_guard<std::mutex> lk(g_lock);
-
-        g_state = {};
-        g_hasData.store(false, std::memory_order_release);
+        while (!g_queue.empty()) g_queue.pop();
     }
 
-    g_cv.notify_one();
+    g_cv.notify_all();
 }
 
+
+// ============================================================
+// MATCH VALIDATION
+// ============================================================
+
+static inline bool IsSameMatch(uint64_t match) {
+
+    uint64_t current = cachedMatch;
+
+    if (!isVaildPtr(current))
+        return false;
+
+    if (!isVaildPtr(match))
+        return false;
+
+    return current == match;
+}
+
+
+// ============================================================
+// WORKER
+// ============================================================
+
 static void SilentWorker() {
+
     while (!g_stop.load(std::memory_order_acquire)) {
 
         SilentState state;
+
+        // ----------------------------------------------------
+        // Ждём, пока очередь не станет непустой или не придёт стоп
+        // ----------------------------------------------------
 
         {
             std::unique_lock<std::mutex> lk(g_lock);
 
             g_cv.wait(lk, [] {
-                return g_stop.load(std::memory_order_acquire) ||
-                       g_hasData.load(std::memory_order_acquire);
+                return
+                    g_stop.load(std::memory_order_acquire) ||
+                    !g_queue.empty();
             });
 
             if (g_stop.load(std::memory_order_acquire))
                 break;
 
-            state = g_state;
+            state = g_queue.front();
+            g_queue.pop();
         }
+
+
+        // ----------------------------------------------------
+        // MATCH CHECK #1
+        // ----------------------------------------------------
+
+        if (!IsSameMatch(state.match)) {
+            continue;
+        }
+
+
+        // ----------------------------------------------------
+        // POINTER CHECK
+        // ----------------------------------------------------
 
         if (!isValidIOSPtr(state.aimPtr) ||
             !isVaildPtr(state.local) ||
             !isVaildPtr(state.target)) {
 
-            ClearSilentState();
             continue;
         }
 
+
+        // ----------------------------------------------------
+        // TARGET POSITION
+        // ----------------------------------------------------
+
         Vector3 tPos = HeadPos(state.target);
 
-        if (!isValidVector(tPos) || isZeroVector(tPos))
+        if (!isValidVector(tPos) ||
+            isZeroVector(tPos)) {
             continue;
+        }
 
         tPos.y += 0.05f;
 
+
+        // ----------------------------------------------------
+        // MATCH CHECK #2
+        // ----------------------------------------------------
+
+        if (!IsSameMatch(state.match)) {
+            continue;
+        }
+
+
+        // ----------------------------------------------------
+        // ORIGIN
+        // ----------------------------------------------------
+
         Vector3 origin =
-            ReadAddr<Vector3>(state.aimPtr + kHit_StartPos);
+            ReadAddr<Vector3>(
+                state.aimPtr + kHit_StartPos
+            );
 
         if (!isValidVector(origin))
             continue;
 
+
         if (isZeroVector(origin)) {
+
             origin = HeadPos(state.local);
 
             if (!isValidVector(origin) ||
@@ -130,14 +218,45 @@ static void SilentWorker() {
             }
         }
 
+
+        // ----------------------------------------------------
+        // MATCH CHECK #3
+        // ----------------------------------------------------
+
+        if (!IsSameMatch(state.match)) {
+            continue;
+        }
+
+
+        // ----------------------------------------------------
+        // DIRECTION
+        // ----------------------------------------------------
+
         Vector3 dir{
             tPos.x - origin.x,
             tPos.y - origin.y,
             tPos.z - origin.z
         };
 
-        if (!isValidVector(dir) || isZeroVector(dir))
+
+        if (!isValidVector(dir) ||
+            isZeroVector(dir)) {
             continue;
+        }
+
+
+        // ----------------------------------------------------
+        // FINAL MATCH CHECK
+        // ----------------------------------------------------
+
+        if (!IsSameMatch(state.match)) {
+            continue;
+        }
+
+
+        // ----------------------------------------------------
+        // WRITE
+        // ----------------------------------------------------
 
         WriteAddr<Vector3>(
             state.aimPtr + kHit_RayDir,
@@ -146,7 +265,13 @@ static void SilentWorker() {
     }
 }
 
+
+// ============================================================
+// INIT
+// ============================================================
+
 void InitSilentAimThread() {
+
     bool expected = false;
 
     if (!g_started.compare_exchange_strong(
@@ -156,15 +281,24 @@ void InitSilentAimThread() {
         return;
     }
 
-    g_stop.store(false, std::memory_order_release);
+    g_stop.store(
+        false,
+        std::memory_order_release
+    );
 
     g_worker = std::thread([] {
         SilentWorker();
     });
 }
 
+
+// ============================================================
+// SHUTDOWN
+// ============================================================
+
 void ShutdownSilentAimThread() {
-    bool expected = false;
+
+    bool expected = true;
 
     if (!g_started.compare_exchange_strong(
             expected,
@@ -173,8 +307,10 @@ void ShutdownSilentAimThread() {
         return;
     }
 
-    g_stop.store(true, std::memory_order_release);
-    g_hasData.store(false, std::memory_order_release);
+    g_stop.store(
+        true,
+        std::memory_order_release
+    );
 
     g_cv.notify_all();
 
@@ -183,34 +319,81 @@ void ShutdownSilentAimThread() {
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_state = {};
+        while (!g_queue.empty()) g_queue.pop();
     }
 
-    g_stop.store(false, std::memory_order_release);
+    g_stop.store(
+        false,
+        std::memory_order_release
+    );
 }
 
+
+// ============================================================
+// RUN
+// ============================================================
+
 void RunSilentAim() {
+
     InitSilentAimThread();
 
+
+    // --------------------------------------------------------
+    // CURRENT MATCH
+    // --------------------------------------------------------
+
+    uint64_t match = cachedMatch;
+
     if (!aimsilent1 ||
-        !isVaildPtr(cachedMatch)) {
+        !isVaildPtr(match)) {
 
         ClearSilentState();
         return;
     }
 
+
+    // --------------------------------------------------------
+    // LOCAL
+    // --------------------------------------------------------
+
     uint64_t local =
-        getLocalPlayer(cachedMatch);
+        getLocalPlayer(match);
+
+    if (!isVaildPtr(local)) {
+
+        ClearSilentState();
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // TARGET
+    // --------------------------------------------------------
 
     uint64_t target =
         g_SilentBestTarget;
 
-    if (!isVaildPtr(local) ||
-        !isVaildPtr(target)) {
+    if (!isVaildPtr(target)) {
 
         ClearSilentState();
         return;
     }
+
+
+    // --------------------------------------------------------
+    // VERIFY MATCH AGAIN
+    // --------------------------------------------------------
+
+    if (!IsSameMatch(match)) {
+
+        ClearSilentState();
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // WEAPON (опционально, но оставлено для безопасности)
+    // --------------------------------------------------------
 
     uint64_t wpn =
         WeaponOnHand(local);
@@ -223,20 +406,16 @@ void RunSilentAim() {
             );
 
         if (!costAmmo) {
+
             ClearSilentState();
             return;
         }
     }
 
-    bool isAiming =
-        ReadAddr<bool>(
-            local + kPlayer_IsAiming
-        );
 
-    if (!isAiming) {
-        ClearSilentState();
-        return;
-    }
+    // --------------------------------------------------------
+    // AIM INFO
+    // --------------------------------------------------------
 
     uint64_t aimPtr =
         ReadAddr<uint64_t>(
@@ -244,26 +423,48 @@ void RunSilentAim() {
         );
 
     if (!isValidIOSPtr(aimPtr)) {
+
         ClearSilentState();
         return;
     }
 
+
+    // --------------------------------------------------------
+    // FINAL CHECK BEFORE PUBLISH
+    // --------------------------------------------------------
+
+    if (!IsSameMatch(match)) {
+
+        ClearSilentState();
+        return;
+    }
+
+
+    // --------------------------------------------------------
+    // ДОБАВЛЯЕМ СОСТОЯНИЕ В ОЧЕРЕДЬ
+    // --------------------------------------------------------
+
     {
         std::lock_guard<std::mutex> lk(g_lock);
 
-        g_state.aimPtr = aimPtr;
-        g_state.local  = local;
-        g_state.target = target;
+        SilentState st;
+        st.match  = match;
+        st.aimPtr = aimPtr;
+        st.local  = local;
+        st.target = target;
 
-        g_hasData.store(
-            true,
-            std::memory_order_release
-        );
+        g_queue.push(st);
     }
 
     g_cv.notify_one();
 }
 
+
+// ============================================================
+// RESET
+// ============================================================
+
 void ResetSilentAim() {
+
     ClearSilentState();
 }
