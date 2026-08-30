@@ -2,7 +2,7 @@
 #import "ESPPrefs.h"
 #import "../drawing_view/offset.h"
 #import "mahoa.h"
-#import "../../sources/silent.h"
+#import "../../sources/silent.h"          // <-- ДОБАВЛЕНО: для ResetSilentAim, RunSilentAim
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #import <notify.h>
@@ -760,7 +760,22 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                         matrixVpWidth:(CGFloat)vpW matrixVpHeight:(CGFloat)vpH {
 
     ESPFrameStats stats = {0, 0, false};
-    if (!buffers || Moudule_Base == -1 || IsAtLobby(Moudule_Base)) return stats;
+    if (!buffers || Moudule_Base == -1) return stats;
+
+    // ========== FIX: Принудительный сброс при нахождении в лобби ==========
+    if (IsAtLobby(Moudule_Base)) {
+        // Сбрасываем кеш матча, чтобы не использовать устаревшие указатели
+        cachedMatch = 0;
+        cachedMatchGame = 0;
+        cachedCamera = 0;
+        cacheRefreshTick = 0;
+        // Останавливаем silent aim
+        ResetSilentAim();
+        // Обнуляем глобальную цель
+        g_SilentBestTarget = 0;
+        return stats; // ничего не рендерим
+    }
+    // =====================================================================
 
     cacheRefreshTick++;
     if (cacheRefreshTick > 30 ||
