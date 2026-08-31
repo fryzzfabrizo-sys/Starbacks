@@ -13,7 +13,6 @@ extern bool     aimsilent1;
 
 // OB54 iOS 64-bit (подтверждено OB53 dump + txt impl)
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8; // GEGFCFDGGGP = m_LastAimingInfoFromWeapon
-static constexpr uint64_t kPlayer_IsAiming    = 0x4A0; // FNMAJOBDENL — isAiming check (как в Silent_CppX)
 static constexpr uint64_t kHit_RayDir         = 0x40;  // NHKKHPLFMNG — raw direction (не нормализуем)
 static constexpr uint64_t kHit_StartPos        = 0x4C;  // BOGOIAMJFDN — origin
 static constexpr uint64_t kWpn_CostAmmo        = 0x7B8;
@@ -97,16 +96,6 @@ void RunSilentAim() {
     // Гранаты / IceWall
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
-        g_hasData.store(false, std::memory_order_release);
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = 0;
-        return;
-    }
-
-    // isAiming check — как в Silent_CppX и C# SilentAim
-    // Без него пишем в aimInfo когда оружие не активно
-    bool isAiming = ReadAddr<bool>(local + kPlayer_IsAiming);
-    if (!isAiming) {
         g_hasData.store(false, std::memory_order_release);
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
