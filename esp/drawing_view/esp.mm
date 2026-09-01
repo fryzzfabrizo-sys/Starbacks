@@ -763,7 +763,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     if (!buffers || Moudule_Base == -1 || IsAtLobby(Moudule_Base)) return stats;
 
     cacheRefreshTick++;
-    if (cacheRefreshTick > 30 ||
+    if (cacheRefreshTick > 10 ||
         !isVaildPtr(cachedMatchGame) || !isVaildPtr(cachedMatch) || !isVaildPtr(cachedCamera)) {
         cachedMatchGame = getMatchGame(Moudule_Base);
         if (!isVaildPtr(cachedMatchGame)) return stats;
@@ -851,8 +851,9 @@ if(BackJump) {
     Vector3  bestHeadPos;
     float    bestScore    = FLT_MAX;
     float    bestDistance = FLT_MAX;
+    bool     bestVisible  = false;
 
-    const float aimFovSq  = (isAimbot || aimsilent1) ? aimFov * aimFov : 0.0f;
+    const float aimFovSq  = isAimbot ? aimFov * aimFov : (aimsilent1 ? 1e12f : 0.0f);
     const float safeDist  = fmaxf(aimDistance, 1.0f);
     const float safeFovSq = fmaxf(aimFovSq, 1.0f);
     const uint64_t base   = entriesArr + kIl2CppArrayItems;
@@ -884,7 +885,7 @@ Vector3 aimPos = headPos;
 
         bool    espVis   = aimVis || isKnocked;
 
-        if ((isAimbot || aimsilent1) && dis <= aimDistance) {
+        if (isAimbot && dis <= aimDistance) {
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
@@ -894,17 +895,14 @@ Vector3 aimPos = headPos;
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix,
                                                  (float)screenVpW, (float)screenVpH,
                                                  (float)vw, (float)vh);
-                // Silent: цель выбирается даже если сзади камеры
-                bool inFrustum = (w2s.z > 0.001f);
-                if (inFrustum || (aimsilent1 && !isAimbot)) {
-                    float dx = inFrustum ? w2s.x - center.x : 0.0f;
-                    float dy = inFrustum ? w2s.y - center.y : 0.0f;
-                    // За спиной — штраф 4× FOV чтобы предпочитать тех кто впереди
-                    float dSq = inFrustum ? dx*dx + dy*dy : aimFovSq * 4.0f;
+                if (w2s.z > 0.001f || (aimsilent1 && !isAimbot)) {
+                    bool behindCam = (w2s.z <= 0.001f);
+                    float dx = behindCam ? 0.0f : w2s.x - center.x;
+                    float dy = behindCam ? 0.0f : w2s.y - center.y;
+                    float dSq = dx * dx + dy * dy;
 
-                    bool inFov = (dSq <= aimFovSq);
-                    if (inFov || (aimsilent1 && !isAimbot)) {
-                        float cn = inFov ? dSq / safeFovSq : 1.5f;
+                    if (dSq <= aimFovSq) {
+                        float cn = dSq / safeFovSq;
                         float dn = dis  / safeDist;
                         float score;
 
@@ -921,6 +919,7 @@ Vector3 aimPos = headPos;
                         if (score < bestScore) {
                             bestScore    = score;
                             bestDistance = dis;
+                            bestVisible  = aimVis;
                             bestTarget   = pawn;
                             bestHeadPos  = aimPos;
                         }
