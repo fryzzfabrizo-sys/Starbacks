@@ -34,7 +34,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 // Фоновый поток: пишет направление и зануляет разброс во всех структурах
 static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::microseconds(60));
+        std::this_thread::sleep_for(std::chrono::microseconds(120));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
         uint64_t player;
