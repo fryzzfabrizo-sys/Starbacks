@@ -1,4 +1,9 @@
 #pragma once
+
+// Выполняет синхронный расчёт и запись направления для Silent Aim.
+// Вызывается из renderESPWithBuffers() каждый кадр.
 void RunSilentAim();
+
+// Пустая заглушка для совместимости (можно вообще не вызывать).
+// Раньше сбрасывала состояние потока, теперь делать нечего.
 void ResetSilentAim();
-void InitSilentAimThread();
