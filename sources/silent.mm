@@ -32,7 +32,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 
 static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::microseconds(1));
+        std::this_thread::sleep_for(std::chrono::microseconds(8));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
         uint64_t h;
