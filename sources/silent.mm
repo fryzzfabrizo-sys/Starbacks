@@ -11,14 +11,14 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// OB54: m_LastAimingInfoFromWeapon — ДВА слота в зависимости от режима игры
-// 0xDC8 = обычный FF, 0xDD0 = MaxGame/CS режим (из реверса CateFF binary)
-static constexpr uint64_t kAimInfoSlots[] = { 0xDC8, 0xDD0 };
+// Все 4 слота HitObjectInfo (обычный FF, MaxGame, скиллы)
+static constexpr uint64_t kAimInfoSlots[] = { 0xDC8, 0xDD0, 0xA90, 0xAA0 };
 
-// HitObjectInfo field offsets (OB50 clean names = OB54 same values)
-static constexpr uint64_t kHit_HitLocation = 0x28; // Vector3 (пишем для точности)
-static constexpr uint64_t kHit_RayDir      = 0x40; // Vector3 — RAW, не нормализуем
-static constexpr uint64_t kHit_StartPos    = 0x4C; // Vector3 — читаем origin
+// HitObjectInfo field offsets
+static constexpr uint64_t kHit_HitLocation = 0x28;
+static constexpr uint64_t kHit_RayDir      = 0x40; // RAW, без нормализации
+static constexpr uint64_t kHit_StartPos    = 0x4C;
+static constexpr uint64_t kHit_Scatter     = 0x5C; // разброс — обязательно занулить
 
 static constexpr uint64_t kWpn_CostAmmo   = 0x7B8;
 
@@ -51,31 +51,32 @@ static void SilentWorker() {
         }
         if (!isVaildPtr(local) || !isVaildPtr(target)) continue;
 
-        // Позиция головы — свежая каждую итерацию
         Vector3 tPos = HeadPos(target);
         if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) continue;
         tPos.y += 0.05f;
 
-        // Пишем в ОБА слота — покрываем обычный FF и MaxGame режим
+        // Пишем во все 4 слота
         for (uint64_t slot : kAimInfoSlots) {
             uint64_t h = ReadAddr<uint64_t>(local + slot);
             if (!isValidIOSPtr(h)) continue;
 
-            // Читаем StartPos из hitObject (откуда летит пуля)
             Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
             if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
                 origin = HeadPos(local);
 
-            // RAW вектор — НЕ нормализуем (подтверждено реверсом CateFF)
+            // RAW вектор — НЕ нормализуем
             Vector3 dir = {
                 tPos.x - origin.x,
                 tPos.y - origin.y,
                 tPos.z - origin.z
             };
 
-            // Пишем направление и позицию попадания (как в CateFF)
+            // Пишем направление и позицию попадания
             WriteAddr<Vector3>(h + kHit_RayDir,      dir);
             WriteAddr<Vector3>(h + kHit_HitLocation, tPos);
+
+            // Обнуляем разброс (scatter) — иначе пули разлетятся
+            WriteAddr<float>(h + kHit_Scatter, 0.0f);
         }
     }
 }
