@@ -3,26 +3,28 @@
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
+#include <thread>
 #include <chrono>
 #include <mutex>
-#include <thread>
 
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// iOS ARM64 OB54 оффсеты (из OB53 dump + сдвиг)
-static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8; // m_LastAimingInfoFromWeapon
-static constexpr uint64_t kHit_RayDir         = 0x40;  // Vector3 RayDir (только это)
-static constexpr uint64_t kHit_StartPos       = 0x4C;  // Vector3 StartPosition (читаем)
+// Смещения HitObjectInfo в игроке (актуально для вашей версии)
+static constexpr uint64_t kHitObjectOffsets[4] = {0xDC8, 0xDD0, 0xA90, 0xAA0};
+static constexpr uint64_t kHit_RayDir         = 0x40;
+static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kHit_Scatter        = 0x5C; // поле разброса (обнуляем)
 static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 
+// Глобальные данные для потока
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr  = 0;
-static Vector3           g_tPos    = {};
-static Vector3           g_lPos    = {};
+static uint64_t          g_PlayerPtr = 0; // local player (не aimPtr!)
+static Vector3           g_TargetPos = {};
+static Vector3           g_LocalPos  = {};
 
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
@@ -30,35 +32,45 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
+// Поток: непрерывно пишет направление во все HitObjectInfo
 static void SilentWorker() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::microseconds(8));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
-        uint64_t h;
-        Vector3  tPos, lPos;
+        uint64_t player;
+        Vector3  targetPos, localPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
+            player    = g_PlayerPtr;
+            targetPos = g_TargetPos;
+            localPos  = g_LocalPos;
         }
-        if (!isVaildPtr(h)) continue;
+        if (!isVaildPtr(player)) continue;
 
-        // Читаем реальный StartPos из объекта
-        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-            origin = lPos;
+        // Проходим по всем структурам HitObjectInfo
+        for (int i = 0; i < 4; i++) {
+            uint64_t hitObj = ReadAddr<uint64_t>(player + kHitObjectOffsets[i]);
+            if (!isVaildPtr(hitObj)) continue;
 
-        Vector3 diff  = { tPos.x-origin.x, tPos.y-origin.y, tPos.z-origin.z };
-        float   lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
-        if (lenSq <= 0.0001f) continue;
+            // Читаем StartPos (если нулевой — берём позицию игрока)
+            Vector3 origin = ReadAddr<Vector3>(hitObj + kHit_StartPos);
+            if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+                origin = localPos;
 
-        float   inv = 1.0f / std::sqrt(lenSq);
-        Vector3 dir = { diff.x*inv, diff.y*inv, diff.z*inv };
+            Vector3 diff  = { targetPos.x - origin.x, targetPos.y - origin.y, targetPos.z - origin.z };
+            float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+            if (lenSq <= 0.0001f) continue;
 
-        // Пишем ТОЛЬКО RayDir — игра сама делает raycast и определяет хит
-        WriteAddr<Vector3>(h + kHit_RayDir, dir);
+            float   inv = 1.0f / std::sqrt(lenSq);
+            Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
+
+            // Записываем направление
+            WriteAddr<Vector3>(hitObj + kHit_RayDir, dir);
+
+            // Обнуляем разброс (иначе игра добавит случайное отклонение)
+            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
+        }
     }
 }
 
@@ -68,6 +80,7 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
+// Вызывается каждый кадр из renderESPWithBuffers
 void RunSilentAim() {
     InitSilentAimThread();
 
@@ -83,15 +96,9 @@ void RunSilentAim() {
         return;
     }
 
-    // Гранаты и IceWall не тратят ammo
+    // Проверка оружия (гранаты и т.п.)
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
-    uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-    if (!isVaildPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
@@ -102,14 +109,14 @@ void RunSilentAim() {
         return;
     }
 
-    // +0.05 Y — как в Silent.cpp, чтобы попадать в центр головы
+    // Небольшое смещение вверх для точного попадания в голову
     tPos.y += 0.05f;
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
+        g_PlayerPtr = local;
+        g_TargetPos = tPos;
+        g_LocalPos  = HeadPos(local);
     }
     g_hasData.store(true, std::memory_order_release);
 }
@@ -117,5 +124,5 @@ void RunSilentAim() {
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
+    g_PlayerPtr = 0;
 }
