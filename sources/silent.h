@@ -1,10 +1,5 @@
 #pragma once
 
-// Запуск фонового потока Silent Aim (вызывается один раз при старте)
-void InitSilentAimThread();
-
-// Остановка потока (необязательно)
-void StopSilentAimThread();
-
-// Основная логика, вызываемая внутри потока (можно и извне)
-void RunSilentAim();
+void InitSilentAimThread();   // запустить поток один раз
+void RunSilentAim();          // вызывается каждый кадр, обновляет данные для потока
+void ResetSilentAim();        // заглушка (опционально)
