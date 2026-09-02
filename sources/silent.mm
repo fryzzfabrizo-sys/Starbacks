@@ -1,5 +1,3 @@
-Привет есть вот такой сайлент как бы
-
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
 #import "mahoa.h"
