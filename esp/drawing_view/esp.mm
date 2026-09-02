@@ -974,6 +974,7 @@ else
 
     // ─── Silent Aim: update shared target + tick ─────────────────────
     g_SilentBestTarget = bestTarget;
+RunSilentAim();
     
 
     return stats;
