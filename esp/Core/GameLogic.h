@@ -14,6 +14,8 @@ bool getIsVisible(uint64_t playerPawn);
 uint64_t WeaponOnHand(uint64_t localPlayer);
 uint64_t getTransNode(uint64_t BodyPart);
 uint64_t getHead(uint64_t player);
+uint64_t getChest(uint64_t player);
+uint64_t getNeck(uint64_t player);
 uint64_t getHip(uint64_t player);
 uint64_t getLeftAnkle(uint64_t player);
 uint64_t getRightAnkle(uint64_t player);
