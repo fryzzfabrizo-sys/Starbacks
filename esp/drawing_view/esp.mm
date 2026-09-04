@@ -853,7 +853,6 @@ if(BackJump) {
     Vector3  bestHeadPos;
     float    bestScore    = FLT_MAX;
     float    bestDistance = FLT_MAX;
-    bool     bestVisible  = false;
 
     const float aimFovSq  = isAimbot ? aimFov * aimFov : 0.0f;
     const float safeDist  = fmaxf(aimDistance, 1.0f);
@@ -923,7 +922,6 @@ if(BackJump) {
                         if (score < bestScore) {
                             bestScore    = score;
                             bestDistance = dis;
-                            bestVisible  = aimVis;
                             bestTarget   = pawn;
                             bestHeadPos  = aimPos;
                         }
