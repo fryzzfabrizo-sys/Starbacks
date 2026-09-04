@@ -605,7 +605,7 @@ ApplyPath(self.linePlayerLayer,
 
         if (stats.inMatch) {
             CGMutablePathRef fovPath = CGPathCreateMutable();
-            BOOL hasFov = RenderFOVCirclePath(fovPath, vw, vh, ((isAimbot || aimsilent1) && isShowFov), aimFov);
+            BOOL hasFov = RenderFOVCirclePath(fovPath, vw, vh, (isAimbot && isShowFov), aimFov);
             self.fovLayer.path = hasFov ? fovPath : nil;
             CGPathRelease(fovPath);
 
@@ -703,43 +703,45 @@ bool get_IsKnockedDown(uint64_t player) {
     return ReadAddr<uint8_t>(player + kKnocked) != 0;
 }
 
+// Velocity-based position prediction
+static inline Vector3 getVelocity(uint64_t pawn) {
+    if (!isVaildPtr(pawn)) return {};
+    uint64_t phyCCT = ReadAddr<uint64_t>(pawn + kPhysCCT);
+    if (!isVaildPtr(phyCCT)) return {};
+    return ReadAddr<Vector3>(phyCCT + kPhysCCT_Velocity);
+}
+
+static inline Vector3 predictPosition(Vector3 pos, Vector3 vel, float dt) {
+    return { pos.x + vel.x * dt, pos.y + vel.y * dt, pos.z + vel.z * dt };
+}
+
 void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
     if (!isVaildPtr(player)) return;
     Quaternion q       = Quaternion::Normalized(rotation);
     Quaternion current = ReadAddr<Quaternion>(player + kAimRotation);
     float angle        = Quaternion::Angle(current, q);
-    if (angle < 0.0005f) return;
+    if (angle < 0.001f) return;
 
     float t;
-
-    // 🟢 TĂNG TỐC ĐỘ AIM GẤP ĐÔI: Khi bắn, aim ngay lập tức (1.0f)
     bool isFiring = get_IsFiring(player);
-    
-    if (isAimRage || isFiring) {
-        t = 1.0f; // 🟢 Aim ngay lập tức khi bắn (Gấp đôi so với trước)
-    } else {
-        // 🟢 Nhân hệ số 2.0 vào speed để nhanh gấp đôi khi di chuyển chuột
-        float speed = Clamp01f(aimSpeed) * 2.0f; 
-        speed = fminf(speed, 1.0f); // Giới hạn max 1.0 để đảm bảo mượt
+    bool isPrepare = ReadAddr<bool>(player + kSAim1); // sAim1 = IsPrepareAttack
 
+    if (isAimRage || isFiring || isPrepare) {
+        // Rage / firing: мгновенно
+        t = 1.0f;
+    } else {
+        // Legit smooth: speed-зависимый Slerp
+        float speed = Clamp01f(aimSpeed);
         t = speed * speed;
-        
-        float centerBoost = 1.0f - Clamp01f(angle / 30.0f);
-        t += centerBoost * 0.20f; 
-        
-        t = fmaxf(0.05f, fminf(t, 1.0f)); 
+        // Boost когда прицел уже близко к цели
+        float closeness = 1.0f - Clamp01f(angle / 25.0f);
+        t += closeness * 0.15f;
+        t = fmaxf(0.05f, fminf(t, 1.0f));
     }
 
-    // 🟢 SỬA LỖI COMPILE: Bỏ đoạn damping phức tạp, chỉ dùng Slerp cơ bản
-    Quaternion out;
-    if (t >= 0.95f) {
-        // Nếu gần đạt target, set thẳng để tránh rung
-        out = q;
-    } else {
-        // Slerp mượt
-        out = Quaternion::Normalized(Quaternion::Slerp(current, q, t));
-    }
-    
+    Quaternion out = (t >= 0.98f) ? q
+                   : Quaternion::Normalized(Quaternion::Slerp(current, q, t));
+
     WriteAddr<Quaternion>(player + kAimRotation,    out);
     WriteAddr<Quaternion>(player + kAimRotationAux, out);
 }
@@ -763,7 +765,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     if (!buffers || Moudule_Base == -1 || IsAtLobby(Moudule_Base)) return stats;
 
     cacheRefreshTick++;
-    if (cacheRefreshTick > 10 ||
+    if (cacheRefreshTick > 30 ||
         !isVaildPtr(cachedMatchGame) || !isVaildPtr(cachedMatch) || !isVaildPtr(cachedCamera)) {
         cachedMatchGame = getMatchGame(Moudule_Base);
         if (!isVaildPtr(cachedMatchGame)) return stats;
@@ -851,8 +853,9 @@ if(BackJump) {
     Vector3  bestHeadPos;
     float    bestScore    = FLT_MAX;
     float    bestDistance = FLT_MAX;
+    bool     bestVisible  = false;
 
-    const float aimFovSq  = isAimbot ? aimFov * aimFov : (aimsilent1 ? 1e12f : 0.0f);
+    const float aimFovSq  = isAimbot ? aimFov * aimFov : 0.0f;
     const float safeDist  = fmaxf(aimDistance, 1.0f);
     const float safeFovSq = fmaxf(aimFovSq, 1.0f);
     const uint64_t base   = entriesArr + kIl2CppArrayItems;
@@ -875,7 +878,10 @@ if(BackJump) {
 
         Vector3 headPos  = getPositionExt(getHead(pawn));
 
-Vector3 aimPos = headPos;
+// Предсказание позиции на ~50ms вперед (средний пинг)
+        Vector3 vel   = getVelocity(pawn);
+        float   ping  = 0.05f; // 50ms
+        Vector3 aimPos = predictPosition(headPos, vel, ping);
         bool    isBot    = get_IsBot(pawn);
 
         bool    isKnocked = get_IsKnockedDown(pawn);
@@ -894,10 +900,9 @@ Vector3 aimPos = headPos;
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix,
                                                  (float)screenVpW, (float)screenVpH,
                                                  (float)vw, (float)vh);
-                if (w2s.z > 0.001f || (aimsilent1 && !isAimbot)) {
-                    bool behindCam = (w2s.z <= 0.001f);
-                    float dx = behindCam ? 0.0f : w2s.x - center.x;
-                    float dy = behindCam ? 0.0f : w2s.y - center.y;
+                if (w2s.z > 0.001f) {
+                    float dx = w2s.x - center.x;
+                    float dy = w2s.y - center.y;
                     float dSq = dx * dx + dy * dy;
 
                     if (dSq <= aimFovSq) {
@@ -918,6 +923,7 @@ Vector3 aimPos = headPos;
                         if (score < bestScore) {
                             bestScore    = score;
                             bestDistance = dis;
+                            bestVisible  = aimVis;
                             bestTarget   = pawn;
                             bestHeadPos  = aimPos;
                         }
@@ -965,8 +971,16 @@ else
         }
 
         if (go && bestDistance >= 0.2f) {
-            float yBias = (aimPosition == 0) ? 0.1f : (aimPosition == 1 ? -0.06f : -0.15f);
-            set_aim(myPawn, GetRotationToLocation(bestHeadPos, yBias, myLoc), bestDistance);
+            // Выбор кости: 0=Head, 1=Neck, 2=Chest
+            Vector3 aimTarget = bestHeadPos;
+            if (aimPosition == 1) {
+                Vector3 neckPos = getPositionExt(getNeck(bestTarget));
+                if (neckPos.x != 0.0f) aimTarget = neckPos;
+            } else if (aimPosition == 2) {
+                Vector3 chestPos = getPositionExt(getChest(bestTarget));
+                if (chestPos.x != 0.0f) aimTarget = chestPos;
+            }
+            set_aim(myPawn, GetRotationToLocation(aimTarget, 0.0f, myLoc), bestDistance);
             if (triggerMode == 1 || (triggerMode == 3 && fire))
                 SetDataUInt16(myPawn, 21, 2);
         }
@@ -974,10 +988,7 @@ else
 
     // ─── Silent Aim: update shared target + tick ─────────────────────
     g_SilentBestTarget = bestTarget;
-    if (aimsilent1)
-        RunSilentAim();
-    else
-        ResetSilentAim();
+    RunSilentAim();
 
     return stats;
 }
