@@ -46,16 +46,13 @@ uint64_t CameraMain(uint64_t matchgame) {
 }
 
 bool getIsVisible(uint64_t playerPawn) {
-    if (!isVaildPtr(playerPawn)) return false;
-    if (get_CurHP(playerPawn) <= 0) return false;
-
-    uint64_t avatarMgr = ReadAddr<uint64_t>(playerPawn + _0x27276BC);
-    if (avatarMgr < 0x100000000ULL || avatarMgr > 0x0000FFFFFFFFFFFFULL) return true;
-
-    uint64_t umaAvatar = ReadAddr<uint64_t>(avatarMgr + _0x28726BD);
-    if (umaAvatar < 0x100000000ULL || umaAvatar > 0x0000FFFFFFFFFFFFULL) return true;
-
-    return ReadAddr<bool>(umaAvatar + _0x2872DCF);
+    // 🟢 Cải thiện tốc độ check visible
+    if (playerPawn == 0) return false;
+    uint64_t AvatarManager = ReadAddr<uint64_t>(playerPawn + _0x27276BC);
+    if (AvatarManager == 0) return false;
+    uint64_t IUmaAvatar = ReadAddr<uint64_t>(AvatarManager + _0x28726BD);
+    if (IUmaAvatar == 0) return false;
+    return ReadAddr<bool>(IUmaAvatar + _0x2872DCF);
 }
 
 static void TipaReadMatrix16(uint64_t addr, float *out) {
@@ -118,8 +115,10 @@ static uint64_t getBoneTrans(uint64_t player, uintptr_t nodeOffset) {
     return getTransNode(BodyPart);
 }
 
-uint64_t getHead(uint64_t player) { return getBoneTrans(player, kHeadNode); }
-uint64_t getHip(uint64_t player) { return getBoneTrans(player, kHipNode); }
+uint64_t getHead(uint64_t player)  { return getBoneTrans(player, kHeadNode);  }
+uint64_t getHip(uint64_t player)   { return getBoneTrans(player, kHipNode);   }
+uint64_t getChest(uint64_t player) { return getBoneTrans(player, kChestNode); }
+uint64_t getNeck(uint64_t player)  { return getBoneTrans(player, kNeckNode);  }
 uint64_t getLeftAnkle(uint64_t player) { return getBoneTrans(player, kLeftAnkleNode); }
 uint64_t getRightAnkle(uint64_t player) { return getBoneTrans(player, kRightAnkleNode); }
 uint64_t getRightToeNode(uint64_t player) { return getBoneTrans(player, kRightToeNode); }
