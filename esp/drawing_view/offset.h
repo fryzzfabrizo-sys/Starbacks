@@ -76,7 +76,13 @@
 #define kFastFireOff            0x208  // Tốc độ bắn (Fast Fire)
 #define kFollowCamera            0x628   // LocalPlayer -> FollowCamera
 #define kFOVOffset               0x70 
-// TypeInfo адреса из script.json (OB54)
-#define kPlayer_TypeInfo         0xBFE0158  // Player TypeInfo
-#define kGMPGMPFNMFP_TypeInfo    0xBFD86F8  // HitObjectInfo TypeInfo
-#define kMatchGame_TypeInfo      0xBFDD9F0  // MatchGame TypeInfo
+// Velocity prediction (OB54)
+#define kPhysCCT          0x200   // PhysicalCCT pointer on Player
+#define kPhysCCT_Velocity 0x17C   // Vector3 Velocity in PhysicalCCT
+
+// Bone nodes OB54 (OB53 - 8)
+#define kChestNode        0x648   // OB53 chest=0x650 → OB54=0x648
+#define kNeckNode         0x640   // hip/neck position
+
+// Silent aim check
+#define kSAim1            0x7D8   // IFCJGLEOGDD bool (IsPrepareAttack, same OB53/OB54)
