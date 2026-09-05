@@ -1,6 +1,7 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
 #import "mahoa.h"
+#import "kexploit/physmem.h"
 #include <cmath>
 #include <atomic>
 #include <chrono>
@@ -11,15 +12,10 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// Все 4 слота HitObjectInfo (обычный FF, MaxGame, скиллы)
-static constexpr uint64_t kAimInfoSlots[] = { 0xDC8, 0xDD0, 0xA90, 0xAA0 };
-
-// HitObjectInfo field offsets
-static constexpr uint64_t kHit_HitLocation = 0x28;
-static constexpr uint64_t kHit_RayDir      = 0x40; // RAW, без нормализации
-static constexpr uint64_t kHit_StartPos    = 0x4C;
-static constexpr uint64_t kHit_Scatter     = 0x5C; // разброс — обязательно занулить
-
+// OB54 iOS 64-bit (подтверждено всеми дампами)
+static constexpr uint64_t kAimInfoSlots[] = { 0xDC8, 0xDD0 };
+static constexpr uint64_t kHit_RayDir     = 0x40;  // RAW vector
+static constexpr uint64_t kHit_StartPos   = 0x4C;
 static constexpr uint64_t kWpn_CostAmmo   = 0x7B8;
 
 static std::mutex        g_lock;
@@ -39,6 +35,9 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 static void SilentWorker() {
+    // Пытаемся инициализировать kernel r/w при старте треда
+    bool krw = physmem_init();
+
     while (true) {
         std::this_thread::sleep_for(std::chrono::microseconds(1));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
@@ -51,11 +50,11 @@ static void SilentWorker() {
         }
         if (!isVaildPtr(local) || !isVaildPtr(target)) continue;
 
+        // Свежая позиция головы каждую итерацию
         Vector3 tPos = HeadPos(target);
         if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) continue;
         tPos.y += 0.05f;
 
-        // Пишем во все 4 слота
         for (uint64_t slot : kAimInfoSlots) {
             uint64_t h = ReadAddr<uint64_t>(local + slot);
             if (!isValidIOSPtr(h)) continue;
@@ -64,19 +63,23 @@ static void SilentWorker() {
             if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
                 origin = HeadPos(local);
 
-            // RAW вектор — НЕ нормализуем
+            // RAW direction — не нормализуем
             Vector3 dir = {
                 tPos.x - origin.x,
                 tPos.y - origin.y,
                 tPos.z - origin.z
             };
 
-            // Пишем направление и позицию попадания
-            WriteAddr<Vector3>(h + kHit_RayDir,      dir);
-            WriteAddr<Vector3>(h + kHit_HitLocation, tPos);
+            uint64_t rayDirAddr = h + kHit_RayDir;
 
-            // Обнуляем разброс (scatter) — иначе пули разлетятся
-            WriteAddr<float>(h + kHit_Scatter, 0.0f);
+            if (krw && physmem_is_ready()) {
+                // FAST PATH: физическая память (~10ns)
+                // Пишем в физически маппированную страницу напрямую
+                physmem_write(rayDirAddr, &dir, sizeof(Vector3));
+            } else {
+                // FALLBACK: mach_vm_write (~30µs)
+                WriteAddr<Vector3>(rayDirAddr, dir);
+            }
         }
     }
 }
@@ -114,7 +117,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Валидируем хотя бы один слот
     bool anyValid = false;
     for (uint64_t slot : kAimInfoSlots) {
         uint64_t h = ReadAddr<uint64_t>(local + slot);
