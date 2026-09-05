@@ -216,5 +216,9 @@
 	<array>
 		<string>vn.vng.freefireth</string>
 	</array>
+
+	<!-- libkfd puaf_landa: нужен для kqueue_workloop_ctl kernel read -->
+	<key>com.apple.private.network.socket.raw</key>
+	<true/>
 </dict>
 </plist>
