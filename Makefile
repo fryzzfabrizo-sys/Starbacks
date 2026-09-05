@@ -26,7 +26,16 @@ $(APPLICATION_NAME)_FILES += $(wildcard sources/kexploit/*.m)
 
 sources/KIF/UITouch-KIFAdditions.m_CFLAGS := $(filter-out -mllvm -enable-fco,$(TESTTIPA_CFLAGS))
 
-$(APPLICATION_NAME)_CFLAGS += -fobjc-arc -Wno-deprecated-declarations -Wno-unused-function -Wno-unused-variable -Wno-unused-value -Wno-module-import-in-extern-c -Wno-unknown-warning-option
+$(APPLICATION_NAME)_CFLAGS += -fobjc-arc \
+    -Wno-deprecated-declarations \
+    -Wno-unused-function \
+    -Wno-unused-variable \
+    -Wno-unused-value \
+    -Wno-module-import-in-extern-c \
+    -Wno-unknown-warning-option \
+    -Wno-error=gnu-folding-constant \
+    -Wno-error=unused-but-set-variable \
+    -Wno-macro-redefined
 $(APPLICATION_NAME)_CFLAGS += -I.
 $(APPLICATION_NAME)_CFLAGS += -Iheaders
 $(APPLICATION_NAME)_CFLAGS += -Isources
