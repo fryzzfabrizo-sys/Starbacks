@@ -1,7 +1,6 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
 #import "mahoa.h"
-#import "kexploit/physmem.h"
 #include <cmath>
 #include <atomic>
 #include <chrono>
@@ -12,18 +11,17 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// OB54 HitObjectInfo slots:
-// 0xA90, 0xAA0 = m_hitObjInfo / m_touchObjectInfo (ЧИТАЮТСЯ OnInstantHit → сервер)
-// 0xDC8, 0xDD0 = m_LastAimingInfoFromWeapon (лог после выстрела)
-// Пишем во ВСЕ — покрываем оба пути
+// OB54 iOS 64-bit
+// 0xA90, 0xAA0 = активные hitObjInfo (читаются OnInstantHit → сервер)
+// 0xDC8, 0xDD0 = m_LastAimingInfoFromWeapon (лог + следующая пуля)
 static constexpr uint64_t kAimInfoSlots[] = { 0xA90, 0xAA0, 0xDC8, 0xDD0 };
-static constexpr uint64_t kHit_RayDir     = 0x40;
-static constexpr uint64_t kHit_StartPos   = 0x4C;
-static constexpr uint64_t kWpn_CostAmmo   = 0x7B8;
+static constexpr uint64_t kHit_RayDir   = 0x40; // RAW вектор, не нормализовать
+static constexpr uint64_t kHit_StartPos = 0x4C;
+static constexpr uint64_t kWpn_CostAmmo = 0x7B8;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
-static std::atomic<int>  g_threadCount{0};
+static std::atomic<int>  g_started{0};
 static uint64_t          g_local  = 0;
 static uint64_t          g_target = 0;
 
@@ -58,40 +56,26 @@ static void DoWrite() {
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
             origin = HeadPos(local);
 
-        Vector3 dir = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
-        uint64_t rayDirAddr = h + kHit_RayDir;
-
-        if (physmem_is_ready()) {
-            // FAST PATH: через ядро ~50ns
-            physmem_write(rayDirAddr, &dir, sizeof(Vector3));
-        } else {
-            // FALLBACK: mach_vm ~30µs
-            WriteAddr<Vector3>(rayDirAddr, dir);
-        }
+        Vector3 dir = {
+            tPos.x - origin.x,
+            tPos.y - origin.y,
+            tPos.z - origin.z
+        };
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
 
 static void SilentWorker() {
-    // Инициализируем kernel r/w при первом запуске треда
-    static std::once_flag init_flag;
-    std::call_once(init_flag, []{ physmem_init(); });
-
     while (true) {
-        // Когда kernel r/w готов — пишем чаще (50µs = 20K/сек × 4 треда = 80K/сек)
-        // Каждый kwrite ~50ns, так что реальная нагрузка минимальна
-        auto delay = physmem_is_ready()
-            ? std::chrono::microseconds(50)
-            : std::chrono::microseconds(50);
-        std::this_thread::sleep_for(delay);
-
-        if (!g_hasData.load(std::memory_order_acquire)) continue;
-        DoWrite();
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+        if (g_hasData.load(std::memory_order_acquire))
+            DoWrite();
     }
 }
 
 void InitSilentAimThread() {
     int expected = 0;
-    if (g_threadCount.compare_exchange_strong(expected, 4)) {
+    if (g_started.compare_exchange_strong(expected, 4)) {
         for (int i = 0; i < 4; i++)
             std::thread(SilentWorker).detach();
     }
