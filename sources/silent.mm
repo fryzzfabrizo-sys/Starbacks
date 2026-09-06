@@ -59,11 +59,11 @@ static void DoWrite() {
     }
 }
 
-// 4 параллельных треда — каждый пишет каждые 50µs
-// Суммарно ~80,000 writes/sec, интервал ~12µs
+// 4 параллельных треда — каждый пытается писать каждую наносекунду.
+// Реальная частота будет ограничена планировщиком ОС и накладными расходами.
 static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
+        std::this_thread::sleep_for(std::chrono::nanoseconds(1));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
         DoWrite();
     }
