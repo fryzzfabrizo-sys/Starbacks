@@ -71,12 +71,24 @@ void InitSilentAimThread() {
 void RunSilentAim() {
     InitSilentAimThread();
 
-    if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
+    if (!aimsilent1) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
 
-    uint64_t local  = getLocalPlayer(cachedMatch);
+    // Получаем актуальные указатели на матч, не полагаясь на кэш (исправление для работы после смены матча)
+    uint64_t matchGame = getMatchGame(Moudule_Base);
+    if (!isVaildPtr(matchGame)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+    uint64_t match = getMatch(matchGame);
+    if (!isVaildPtr(match)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    uint64_t local = getLocalPlayer(match);
     uint64_t target = g_SilentBestTarget;
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
@@ -102,8 +114,7 @@ void RunSilentAim() {
         return;
     }
 
-    // +0.05 Y — как в Silent.cpp, чтобы попадать в центр головы
-    tPos.y += 0.05f;
+    tPos.y += 0.05f; // смещение для попадания в центр головы
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
