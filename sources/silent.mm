@@ -9,76 +9,73 @@
 
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
-extern bool aimsilent1;
+extern bool     aimsilent1;
 
-static Vector3 GetHeadPosition(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return {0.0f, 0.0f, 0.0f};
-    uint64_t headTrans = getHead(pawn);
-    if (!isVaildPtr(headTrans)) return {0.0f, 0.0f, 0.0f};
-    return getPositionExt(headTrans);
+static constexpr uint64_t kAimInfoSlots[] = { 0xDC8, 0xDD0 };
+static constexpr uint64_t kHit_RayDir     = 0x40;
+static constexpr uint64_t kHit_StartPos   = 0x4C;
+static constexpr uint64_t kWpn_CostAmmo   = 0x7B8;
+
+static std::mutex        g_lock;
+static std::atomic<bool> g_hasData{false};
+static std::atomic<int>  g_threadCount{0};
+static uint64_t          g_local  = 0;
+static uint64_t          g_target = 0;
+
+static inline bool isValidIOSPtr(uint64_t p) {
+    return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
 
-static std::mutex g_silentLock;
-static uint64_t g_silentPlayer = 0;
-static Vector3 g_silentTarget = {0.0f, 0.0f, 0.0f};
-static Vector3 g_silentLocal = {0.0f, 0.0f, 0.0f};
-static std::atomic<bool> g_silentData{false};
-static std::atomic<bool> g_silentThreadStarted{false};
+static Vector3 HeadPos(uint64_t pawn) {
+    if (!isVaildPtr(pawn)) return {};
+    uint64_t t = getHead(pawn);
+    return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
+}
 
-static void SilentAimWorker() {
-    const uint64_t hitObjectOffsets[] = {0xDC8, 0xDD0, 0xA90, 0xAA0};
+// Один цикл записи — вызывается из каждого треда
+static void DoWrite() {
+    uint64_t local, target;
+    {
+        std::lock_guard<std::mutex> lk(g_lock);
+        local  = g_local;
+        target = g_target;
+    }
+    if (!isVaildPtr(local) || !isVaildPtr(target)) return;
+
+    Vector3 tPos = HeadPos(target);
+    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) return;
+    tPos.y += 0.05f;
+
+    for (uint64_t slot : kAimInfoSlots) {
+        uint64_t h = ReadAddr<uint64_t>(local + slot);
+        if (!isValidIOSPtr(h)) continue;
+
+        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+            origin = HeadPos(local);
+
+        Vector3 dir = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
+    }
+}
+
+// 4 параллельных треда — каждый пишет каждые 50µs
+// Суммарно ~80,000 writes/sec, интервал ~12µs
+static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
-        if (!g_silentData.load(std::memory_order_acquire)) continue;
-
-        uint64_t localPlayer;
-        Vector3 targetPos;
-        Vector3 localPos;
-        {
-            std::lock_guard<std::mutex> lock(g_silentLock);
-            localPlayer = g_silentPlayer;
-            targetPos = g_silentTarget;
-            localPos = g_silentLocal;
-        }
-
-        if (!isVaildPtr(localPlayer)) continue;
-
-        for (uint64_t offset : hitObjectOffsets) {
-            uint64_t hitObjInfo = ReadAddr<uint64_t>(localPlayer + offset);
-            if (!isVaildPtr(hitObjInfo)) continue;
-
-            Vector3 base = ReadAddr<Vector3>(hitObjInfo + 0x4C);
-            if (base.x == 0.0f && base.y == 0.0f && base.z == 0.0f) {
-                base = localPos;
-            }
-
-            Vector3 direction = {
-                targetPos.x - base.x,
-                targetPos.y - base.y,
-                targetPos.z - base.z
-            };
-            const float lengthSquared =
-                direction.x * direction.x +
-                direction.y * direction.y +
-                direction.z * direction.z;
-            if (lengthSquared <= 0.0001f) continue;
-
-            const float inverseLength = 1.0f / std::sqrt(lengthSquared);
-            direction.x *= inverseLength;
-            direction.y *= inverseLength;
-            direction.z *= inverseLength;
-
-            WriteAddr<Vector3>(hitObjInfo + 0x40, direction);
-            WriteAddr<Vector3>(hitObjInfo + 0x28, targetPos);
-            WriteAddr<float>(hitObjInfo + 0x5C, 0.0f);
-        }
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+        if (!g_hasData.load(std::memory_order_acquire)) continue;
+        DoWrite();
     }
 }
 
 void InitSilentAimThread() {
-    bool expected = false;
-    if (g_silentThreadStarted.compare_exchange_strong(expected, true)) {
-        std::thread(SilentAimWorker).detach();
+    // Запускаем 4 треда один раз
+    int expected = 0;
+    if (g_threadCount.compare_exchange_strong(expected, 4)) {
+        for (int i = 0; i < 4; i++) {
+            std::thread(SilentWorker).detach();
+        }
     }
 }
 
@@ -86,31 +83,50 @@ void RunSilentAim() {
     InitSilentAimThread();
 
     if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
-        g_silentData.store(false, std::memory_order_release);
-        std::lock_guard<std::mutex> lock(g_silentLock);
-        g_silentPlayer = 0;
+        g_hasData.store(false, std::memory_order_release);
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_local = g_target = 0;
         return;
     }
 
-    uint64_t localPlayer = getLocalPlayer(cachedMatch);
+    uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
-    if (!isVaildPtr(localPlayer) || !isVaildPtr(target)) {
-        g_silentData.store(false, std::memory_order_release);
+    if (!isVaildPtr(local) || !isVaildPtr(target)) {
+        g_hasData.store(false, std::memory_order_release);
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_local = g_target = 0;
         return;
     }
 
-    Vector3 targetPos = GetHeadPosition(target);
-    if (targetPos.x == 0.0f && targetPos.y == 0.0f && targetPos.z == 0.0f) {
-        g_silentData.store(false, std::memory_order_release);
+    uint64_t wpn = WeaponOnHand(local);
+    if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
+        g_hasData.store(false, std::memory_order_release);
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_local = g_target = 0;
         return;
     }
 
-    Vector3 localPos = GetHeadPosition(localPlayer);
+    bool anyValid = false;
+    for (uint64_t slot : kAimInfoSlots) {
+        if (isValidIOSPtr(ReadAddr<uint64_t>(local + slot))) { anyValid = true; break; }
+    }
+    if (!anyValid) {
+        g_hasData.store(false, std::memory_order_release);
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_local = g_target = 0;
+        return;
+    }
+
     {
-        std::lock_guard<std::mutex> lock(g_silentLock);
-        g_silentPlayer = localPlayer;
-        g_silentTarget = targetPos;
-        g_silentLocal = localPos;
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_local  = local;
+        g_target = target;
     }
-    g_silentData.store(true, std::memory_order_release);
+    g_hasData.store(true, std::memory_order_release);
+}
+
+void ResetSilentAim() {
+    g_hasData.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> lk(g_lock);
+    g_local = g_target = 0;
 }
