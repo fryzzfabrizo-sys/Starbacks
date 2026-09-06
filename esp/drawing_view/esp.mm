@@ -852,8 +852,7 @@ if(BackJump) {
     float    bestScore    = FLT_MAX;
     float    bestDistance = FLT_MAX;
 
-    // Исправление для Silent Aim: если включён сайлент, FOV не ограничиваем (ставим огромное значение)
-    const float aimFovSq  = (isAimbot || aimsilent1) ? (isAimbot ? aimFov * aimFov : 1e12f) : 0.0f;
+    const float aimFovSq  = isAimbot ? aimFov * aimFov : (aimsilent1 ? 1e12f : 0.0f);
     const float safeDist  = fmaxf(aimDistance, 1.0f);
     const float safeFovSq = fmaxf(aimFovSq, 1.0f);
     const uint64_t base   = entriesArr + kIl2CppArrayItems;
@@ -881,7 +880,7 @@ Vector3 aimPos = headPos;
 
         bool    isKnocked = get_IsKnockedDown(pawn);
         
-        bool aimVis = getIsVisible(pawn); // оригинальная (нерабочая) функция – оставляем как было
+        bool aimVis = (hp > 0) && getIsVisible(pawn);
 
         bool    espVis   = aimVis || isKnocked;
 
@@ -895,20 +894,15 @@ Vector3 aimPos = headPos;
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix,
                                                  (float)screenVpW, (float)screenVpH,
                                                  (float)vw, (float)vh);
-                // Для сайлента разрешаем обрабатывать даже цели за спиной (z <= 0.001)
-                if (w2s.z > 0.001f || aimsilent1) {
-                    // НЕ обнуляем координаты для заспинных целей, чтобы они имели большое отклонение от центра
-                    float dx = w2s.x - center.x;
-                    float dy = w2s.y - center.y;
-                    float dSq = dx*dx + dy*dy;
+                if (w2s.z > 0.001f || (aimsilent1 && !isAimbot)) {
+                    bool behindCam = (w2s.z <= 0.001f);
+                    float dx = behindCam ? 0.0f : w2s.x - center.x;
+                    float dy = behindCam ? 0.0f : w2s.y - center.y;
+                    // Цели за спиной: большой штраф — выбираются только если нет других
+                    float dSq = behindCam ? 1e10f : dx*dx + dy*dy;
 
-                    // Для аимбота проверяем FOV, для сайлента – пропускаем (т.к. aimFovSq огромное)
-                    if (isAimbot && dSq > aimFovSq) {
-                        valid = NO;
-                    }
-                    if (valid) {
-                        // Для сайлента cn используем как dSq (огромное для заспинных), для аимбота нормируем
-                        float cn = isAimbot ? (dSq / safeFovSq) : dSq;
+                    if (dSq <= aimFovSq) {
+                        float cn = dSq / safeFovSq;
                         float dn = dis  / safeDist;
                         float score;
 
@@ -981,11 +975,10 @@ else
 
     // ─── Silent Aim: update shared target + tick ─────────────────────
     g_SilentBestTarget = bestTarget;
-    if (aimsilent1) {
+    if (aimsilent1)
         RunSilentAim();
-    } else {
+    else
         ResetSilentAim();
-    }
 
     return stats;
 }
