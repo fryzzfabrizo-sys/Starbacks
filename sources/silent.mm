@@ -7,7 +7,7 @@
 #include <mutex>
 #include <thread>
 
-// Объявляем внешние переменные, используемые в этом файле
+// Объявляем внешние переменные
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
@@ -78,7 +78,7 @@ void RunSilentAim() {
         return;
     }
 
-    // Получаем актуальные указатели на матч, не полагаясь на кэш (исправление для работы после смены матча)
+    // Получаем актуальный матч, чтобы работать после смены матча
     uint64_t matchGame = getMatchGame(Moudule_Base);
     if (!isVaildPtr(matchGame)) {
         g_hasData.store(false, std::memory_order_release);
