@@ -557,22 +557,6 @@ self.statusLayer.shadowRadius    = 1.0f;
         [CATransaction setDisableActions:YES];
         [self resetTextLayers];
 
-        // Очистка всех слоёв от предыдущих артефактов
-        self.boxLayer.path = nil;
-        self.boneLayer.path = nil;
-        self.snaplineLayer.path = nil;
-        self.hpBackgroundLayer.path = nil;
-        self.hpFillLayer.path = nil;
-        self.aimAssistLayer.path = nil;
-        self.alertLayer.path = nil;
-        self.fovLayer.path = nil;
-        self.boxBotLayer.path = nil;
-        self.boxPlayerLayer.path = nil;
-        self.lineBotLayer.path = nil;
-        self.linePlayerLayer.path = nil;
-        self.boxKnockLayer.path = nil;
-        self.lineKnockLayer.path = nil;
-
         CGFloat vw    = self.bounds.size.width;
         CGFloat vh    = self.bounds.size.height;
         CGFloat scale = self.contentScaleFactor > 0.01f ? self.contentScaleFactor : 1.0f;
@@ -621,7 +605,7 @@ ApplyPath(self.linePlayerLayer,
 
         if (stats.inMatch) {
             CGMutablePathRef fovPath = CGPathCreateMutable();
-            BOOL hasFov = RenderFOVCirclePath(fovPath, vw, vh, (isAimbot && isShowFov), aimFov);
+            BOOL hasFov = RenderFOVCirclePath(fovPath, vw, vh, ((isAimbot || aimsilent1) && isShowFov), aimFov);
             self.fovLayer.path = hasFov ? fovPath : nil;
             CGPathRelease(fovPath);
 
@@ -685,16 +669,6 @@ Quaternion GetRotationToLocation(Vector3 target, float yBias, Vector3 myLoc) {
 
 static inline bool IsZeroVec(const Vector3 &v) {
     return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
-}
-
-// ─── Реализация проверки видимости через битовый массив ─────
-bool get_IsVisible(uint64_t player) {
-    if (!isVaildPtr(player)) return false;
-    uint64_t bitArray = ReadAddr<uint64_t>(player + kVisibleBitArray);
-    if (!isVaildPtr(bitArray)) return false;
-    uint32_t flags = ReadAddr<uint32_t>(bitArray + kBitArray_mValue);
-    // Проверяем, что игрок находится в кадре (ISVISIBLE_CAMERA) и жив (ISVISIBLE_ALIVE)
-    return (flags & kISVisibleCamera) != 0 && (flags & kISVisibleAlive) != 0;
 }
 
 Vector3 GetAimTargetPos(Vector3 head, Vector3 hip, int setting) {
@@ -878,8 +852,8 @@ if(BackJump) {
     float    bestScore    = FLT_MAX;
     float    bestDistance = FLT_MAX;
 
-    // Для silent aim FOV не ограничиваем (ставим огромное значение), для обычного аимбота – как задано
-    const float aimFovSq  = isAimbot ? aimFov * aimFov : (aimsilent1 ? 1e12f : 0.0f);
+    // Исправление для Silent Aim: если включён сайлент, FOV не ограничиваем (ставим огромное значение)
+    const float aimFovSq  = (isAimbot || aimsilent1) ? (isAimbot ? aimFov * aimFov : 1e12f) : 0.0f;
     const float safeDist  = fmaxf(aimDistance, 1.0f);
     const float safeFovSq = fmaxf(aimFovSq, 1.0f);
     const uint64_t base   = entriesArr + kIl2CppArrayItems;
@@ -907,14 +881,10 @@ Vector3 aimPos = headPos;
 
         bool    isKnocked = get_IsKnockedDown(pawn);
         
-        bool aimVis = get_IsVisible(pawn);   // теперь используется правильная проверка
+        bool aimVis = getIsVisible(pawn); // оригинальная (нерабочая) функция – оставляем как было
 
         bool    espVis   = aimVis || isKnocked;
 
-        // Если игрок невидим и не в нокдауне – пропускаем его для ESP (исправление мусорного отображения)
-        if (!espVis) continue;
-
-        // Обработка для аимбота и сайлента
         if ((isAimbot || aimsilent1) && dis <= aimDistance) {
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
@@ -925,20 +895,23 @@ Vector3 aimPos = headPos;
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix,
                                                  (float)screenVpW, (float)screenVpH,
                                                  (float)vw, (float)vh);
-                // Для silent разрешаем цели даже за спиной (z <= 0.001)
+                // Для сайлента разрешаем обрабатывать даже цели за спиной (z <= 0.001)
                 if (w2s.z > 0.001f || aimsilent1) {
+                    // НЕ обнуляем координаты для заспинных целей, чтобы они имели большое отклонение от центра
                     float dx = w2s.x - center.x;
                     float dy = w2s.y - center.y;
                     float dSq = dx*dx + dy*dy;
 
-                    // Для обычного аимбота проверяем FOV, для silent – нет (огромное значение)
+                    // Для аимбота проверяем FOV, для сайлента – пропускаем (т.к. aimFovSq огромное)
                     if (isAimbot && dSq > aimFovSq) {
                         valid = NO;
                     }
                     if (valid) {
+                        // Для сайлента cn используем как dSq (огромное для заспинных), для аимбота нормируем
                         float cn = isAimbot ? (dSq / safeFovSq) : dSq;
-                        float dn = dis / safeDist;
+                        float dn = dis  / safeDist;
                         float score;
+
                         if (aimTargetMode == 0)
                             score = cn * 0.85f + dn * 0.15f;
                         else if (aimTargetMode == 1)
@@ -960,18 +933,20 @@ Vector3 aimPos = headPos;
             }
         }
 
-        // Отрисовка ESP (только если видим или в нокдауне)
-        if (isBot)
-            stats.botCount++;
-        else
-            stats.playerCount++;
+        if (espVis) {
 
-        RenderESPForPawn(buffers,
-                         ESPTextCallback,
-                         (__bridge void *)self,
-                         pawn, hp, dis, matrix,
-                         (float)vw, (float)vh,
-                         (float)screenVpW, (float)screenVpH);
+if (isBot)
+    stats.botCount++;
+else
+    stats.playerCount++;
+
+            RenderESPForPawn(buffers,
+                             ESPTextCallback,
+                             (__bridge void *)self,
+                             pawn, hp, dis, matrix,
+                             (float)vw, (float)vh,
+                             (float)screenVpW, (float)screenVpH);
+        }
     }
 
     if (!isAimbot) {
@@ -1004,7 +979,7 @@ Vector3 aimPos = headPos;
         }
     }
 
-    // ─── Silent Aim: обновляем цель и запускаем поток (если включен) ─────
+    // ─── Silent Aim: update shared target + tick ─────────────────────
     g_SilentBestTarget = bestTarget;
     if (aimsilent1) {
         RunSilentAim();
