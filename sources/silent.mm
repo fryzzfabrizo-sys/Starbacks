@@ -7,8 +7,6 @@
 #include <mutex>
 #include <thread>
 
-// Объявляем внешние переменные
-extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
@@ -73,28 +71,24 @@ void InitSilentAimThread() {
 void RunSilentAim() {
     InitSilentAimThread();
 
-    if (!aimsilent1) {
+    if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
 
-    // Получаем актуальный матч, чтобы работать после смены матча
-    uint64_t matchGame = getMatchGame(Moudule_Base);
-    if (!isVaildPtr(matchGame)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-    uint64_t match = getMatch(matchGame);
-    if (!isVaildPtr(match)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
-    uint64_t local = getLocalPlayer(match);
+    uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
         return;
+    }
+
+    // Фикс второго матча: если localPlayer сменился (новый матч) — сброс aimPtr
+    static uint64_t s_lastLocal = 0;
+    if (local != s_lastLocal) {
+        s_lastLocal = local;
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_aimPtr = 0; // форсируем перечитывание aimPtr для нового матча
     }
 
     // Гранаты и IceWall не тратят ammo
@@ -105,7 +99,7 @@ void RunSilentAim() {
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-    if (!isVaildPtr(aimPtr)) {
+    if (!isVaildPtr(aimPtr) || aimPtr < 0x100000000ULL) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
@@ -116,7 +110,8 @@ void RunSilentAim() {
         return;
     }
 
-    tPos.y += 0.05f; // смещение для попадания в центр головы
+    // +0.05 Y — как в Silent.cpp, чтобы попадать в центр головы
+    tPos.y += 0.05f;
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
