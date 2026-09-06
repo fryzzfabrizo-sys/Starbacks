@@ -1,7 +1,6 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
 #import "mahoa.h"
-#import "kexploit/physmem.h"
 #include <cmath>
 #include <atomic>
 #include <chrono>
@@ -33,6 +32,7 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
+// Один цикл записи — вызывается из каждого треда
 static void DoWrite() {
     uint64_t local, target;
     {
@@ -55,41 +55,27 @@ static void DoWrite() {
             origin = HeadPos(local);
 
         Vector3 dir = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
-        uint64_t rayDirAddr = h + kHit_RayDir;
-
-        if (physmem_is_ready()) {
-            // FAST PATH: через ядро ~50ns
-            physmem_write(rayDirAddr, &dir, sizeof(Vector3));
-        } else {
-            // FALLBACK: mach_vm ~30µs
-            WriteAddr<Vector3>(rayDirAddr, dir);
-        }
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
 
+// 4 параллельных треда — каждый пишет каждые 50µs
+// Суммарно ~80,000 writes/sec, интервал ~12µs
 static void SilentWorker() {
-    // Инициализируем kernel r/w при первом запуске треда
-    static std::once_flag init_flag;
-    std::call_once(init_flag, []{ physmem_init(); });
-
     while (true) {
-        // Когда kernel r/w готов — пишем чаще (50µs = 20K/сек × 4 треда = 80K/сек)
-        // Каждый kwrite ~50ns, так что реальная нагрузка минимальна
-        auto delay = physmem_is_ready()
-            ? std::chrono::microseconds(50)
-            : std::chrono::microseconds(50);
-        std::this_thread::sleep_for(delay);
-
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
         DoWrite();
     }
 }
 
 void InitSilentAimThread() {
+    // Запускаем 4 треда один раз
     int expected = 0;
     if (g_threadCount.compare_exchange_strong(expected, 4)) {
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 4; i++) {
             std::thread(SilentWorker).detach();
+        }
     }
 }
 
