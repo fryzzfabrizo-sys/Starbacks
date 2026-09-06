@@ -7,6 +7,8 @@
 #include <mutex>
 #include <thread>
 
+// Объявляем внешние переменные, используемые в этом файле
+extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
