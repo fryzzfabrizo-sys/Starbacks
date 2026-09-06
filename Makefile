@@ -22,7 +22,7 @@ $(APPLICATION_NAME)_FILES += $(wildcard esp/Core/*.cpp)
 # Thêm file nguồn oxorany.cpp vào để biên dịch chung
 $(APPLICATION_NAME)_FILES += oxorany/oxorany.cpp
 $(APPLICATION_NAME)_FILES += API/APIClient.mm
-$(APPLICATION_NAME)_FILES += $(wildcard sources/kexploit/*.m)
+$(APPLICATION_NAME)_FILES += sources/kexploit/physmem.m
 
 sources/KIF/UITouch-KIFAdditions.m_CFLAGS := $(filter-out -mllvm -enable-fco,$(TESTTIPA_CFLAGS))
 
@@ -34,8 +34,6 @@ $(APPLICATION_NAME)_CFLAGS += -Isources/KIF
 # Thêm đường dẫn include thư mục oxorany để compiler tìm thấy file .h
 $(APPLICATION_NAME)_CFLAGS += -Ioxorany
 $(APPLICATION_NAME)_CFLAGS += -IAPI
-$(APPLICATION_NAME)_CFLAGS += -Isources/kexploit
-$(APPLICATION_NAME)_CFLAGS += -Isources/kexploit/libkfd
 
 $(APPLICATION_NAME)_CFLAGS += -DNOTIFY_DESTROY_HUD="\"vn.vng.freefireth.hud.destroy\""
 $(APPLICATION_NAME)_CFLAGS += -DPID_PATH="@\"/var/mobile/Library/Caches/vn.vng.freefireth.pid\""
