@@ -763,7 +763,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     if (!buffers || Moudule_Base == -1 || IsAtLobby(Moudule_Base)) return stats;
 
     cacheRefreshTick++;
-    if (cacheRefreshTick > 10 ||
+    if (cacheRefreshTick > 8 ||
         !isVaildPtr(cachedMatchGame) || !isVaildPtr(cachedMatch) || !isVaildPtr(cachedCamera)) {
         cachedMatchGame = getMatchGame(Moudule_Base);
         if (!isVaildPtr(cachedMatchGame)) return stats;
@@ -898,7 +898,7 @@ Vector3 aimPos = headPos;
                     bool behindCam = (w2s.z <= 0.001f);
                     float dx = behindCam ? 0.0f : w2s.x - center.x;
                     float dy = behindCam ? 0.0f : w2s.y - center.y;
-                    // Цели за спиной: большой штраф — выбираются только если нет других
+                    // За спиной — штраф (не 0, иначе выигрывает над передними)
                     float dSq = behindCam ? 1e10f : dx*dx + dy*dy;
 
                     if (dSq <= aimFovSq) {
@@ -906,13 +906,17 @@ Vector3 aimPos = headPos;
                         float dn = dis  / safeDist;
                         float score;
 
-                        if (aimTargetMode == 0)
+                        if (aimsilent1 && !isAimbot) {
+                            // Silent: только ближайший к центру экрана (чистый dSq)
+                            score = cn;
+                        } else if (aimTargetMode == 0) {
                             score = cn * 0.85f + dn * 0.15f;
-                        else if (aimTargetMode == 1)
+                        } else if (aimTargetMode == 1) {
                             score = fminf((float)hp / 200.0f, 1.5f) * 0.65f
                                     + cn * 0.25f + dn * 0.10f;
-                        else
+                        } else {
                             score = dn * 0.75f + cn * 0.25f;
+                        }
 
                         if (pawn == gAimLockTarget) score *= 0.80f;
 
