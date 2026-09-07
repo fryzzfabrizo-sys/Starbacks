@@ -760,10 +760,13 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                         matrixVpWidth:(CGFloat)vpW matrixVpHeight:(CGFloat)vpH {
 
     ESPFrameStats stats = {0, 0, false};
-    if (!buffers || Moudule_Base == -1 || IsAtLobby(Moudule_Base)) return stats;
+    if (!buffers || Moudule_Base == -1 || IsAtLobby(Moudule_Base)) {
+        ResetSilentAim(); // фикс второго матча — сбрасываем при выходе в лобби
+        return stats;
+    }
 
     cacheRefreshTick++;
-    if (cacheRefreshTick > 8 ||
+    if (cacheRefreshTick > 15 ||
         !isVaildPtr(cachedMatchGame) || !isVaildPtr(cachedMatch) || !isVaildPtr(cachedCamera)) {
         cachedMatchGame = getMatchGame(Moudule_Base);
         if (!isVaildPtr(cachedMatchGame)) return stats;
@@ -888,7 +891,7 @@ Vector3 aimPos = headPos;
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
-            if (!isAimCheckVisible && !aimVis)    valid = NO;
+            if (!isAimCheckVisible && !aimVis && !aimsilent1) valid = NO;
 
             if (valid) {
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix,
@@ -898,7 +901,6 @@ Vector3 aimPos = headPos;
                     bool behindCam = (w2s.z <= 0.001f);
                     float dx = behindCam ? 0.0f : w2s.x - center.x;
                     float dy = behindCam ? 0.0f : w2s.y - center.y;
-                    // За спиной — штраф (не 0, иначе выигрывает над передними)
                     float dSq = behindCam ? 1e10f : dx*dx + dy*dy;
 
                     if (dSq <= aimFovSq) {
@@ -906,17 +908,15 @@ Vector3 aimPos = headPos;
                         float dn = dis  / safeDist;
                         float score;
 
-                        if (aimsilent1 && !isAimbot) {
-                            // Silent: только ближайший к центру экрана (чистый dSq)
-                            score = cn;
-                        } else if (aimTargetMode == 0) {
+                        if (aimsilent1 && !isAimbot)
+                            score = cn; // silent: только центр экрана
+                        else if (aimTargetMode == 0)
                             score = cn * 0.85f + dn * 0.15f;
-                        } else if (aimTargetMode == 1) {
+                        else if (aimTargetMode == 1)
                             score = fminf((float)hp / 200.0f, 1.5f) * 0.65f
                                     + cn * 0.25f + dn * 0.10f;
-                        } else {
+                        else
                             score = dn * 0.75f + cn * 0.25f;
-                        }
 
                         if (pawn == gAimLockTarget) score *= 0.80f;
 
