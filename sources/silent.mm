@@ -12,15 +12,18 @@ extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
 // iOS ARM64 OB54 оффсеты (из OB53 dump + сдвиг)
-static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8; // m_LastAimingInfoFromWeapon
+// 0xDC8 = обычный FF, 0xDD0 = MaxGame/CS режим (из реверса CateFF)
+static constexpr uint64_t kPlayer_LastAimInfo  = 0xDC8;
+static constexpr uint64_t kPlayer_LastAimInfo2 = 0xDD0;
 static constexpr uint64_t kHit_RayDir         = 0x40;  // Vector3 RayDir (только это)
 static constexpr uint64_t kHit_StartPos       = 0x4C;  // Vector3 StartPosition (читаем)
 static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
-static std::atomic<bool> g_started{false};
+static std::atomic<int>  g_started{0}; // 4 треда
 static uint64_t          g_aimPtr  = 0;
+static uint64_t          g_local2  = 0; // для DD0 слота
 static Vector3           g_tPos    = {};
 static Vector3           g_lPos    = {};
 
@@ -32,16 +35,17 @@ static Vector3 HeadPos(uint64_t pawn) {
 
 static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono: nanoseconds(1));
+        std::this_thread::sleep_for(std::chrono::nanoseconds(1));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
-        uint64_t h;
+        uint64_t h, local2;
         Vector3  tPos, lPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
+            h      = g_aimPtr;
+            tPos   = g_tPos;
+            lPos   = g_lPos;
+            local2 = g_local2;
         }
         if (!isVaildPtr(h)) continue;
 
@@ -57,15 +61,29 @@ static void SilentWorker() {
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x*inv, diff.y*inv, diff.z*inv };
 
-        // Пишем ТОЛЬКО RayDir — игра сама делает raycast и определяет хит
+        // Пишем RayDir в оба слота (DC8 = обычный, DD0 = MaxGame)
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
+
+        uint64_t h2 = ReadAddr<uint64_t>(local2 + kPlayer_LastAimInfo2);
+        if (isVaildPtr(h2) && h2 >= 0x100000000ULL) {
+            Vector3 origin2 = ReadAddr<Vector3>(h2 + kHit_StartPos);
+            if (origin2.x == 0.0f && origin2.y == 0.0f && origin2.z == 0.0f) origin2 = lPos;
+            Vector3 diff2 = { tPos.x-origin2.x, tPos.y-origin2.y, tPos.z-origin2.z };
+            float len2 = diff2.x*diff2.x + diff2.y*diff2.y + diff2.z*diff2.z;
+            if (len2 > 0.0001f) {
+                float inv2 = 1.0f / std::sqrt(len2);
+                WriteAddr<Vector3>(h2 + kHit_RayDir, { diff2.x*inv2, diff2.y*inv2, diff2.z*inv2 });
+            }
+        }
     }
 }
 
 void InitSilentAimThread() {
-    bool exp = false;
-    if (g_started.compare_exchange_strong(exp, true))
-        std::thread(SilentWorker).detach();
+    int exp = 0;
+    if (g_started.compare_exchange_strong(exp, 4)) {
+        for (int i = 0; i < 4; i++)
+            std::thread(SilentWorker).detach();
+    }
 }
 
 void RunSilentAim() {
@@ -108,6 +126,7 @@ void RunSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = aimPtr;
+        g_local2 = local;
         g_tPos   = tPos;
         g_lPos   = HeadPos(local);
     }
