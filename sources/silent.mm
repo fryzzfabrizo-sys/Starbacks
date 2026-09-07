@@ -21,7 +21,7 @@ static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
-static std::atomic<int>  g_started{0}; // 4 треда
+static std::atomic<bool> g_started{false};
 static uint64_t          g_aimPtr  = 0;
 static uint64_t          g_local2  = 0; // для DD0 слота
 static Vector3           g_tPos    = {};
@@ -79,11 +79,9 @@ static void SilentWorker() {
 }
 
 void InitSilentAimThread() {
-    int exp = 0;
-    if (g_started.compare_exchange_strong(exp, 4)) {
-        for (int i = 0; i < 4; i++)
-            std::thread(SilentWorker).detach();
-    }
+    bool exp = false;
+    if (g_started.compare_exchange_strong(exp, true))
+        std::thread(SilentWorker).detach();
 }
 
 void RunSilentAim() {
@@ -121,7 +119,7 @@ void RunSilentAim() {
     }
 
     // +0.05 Y — как в Silent.cpp, чтобы попадать в центр головы
-    tPos.y += 0.05f;
+    // tPos.y += 0.05f; // убрано — мешает по движущимся целям
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
