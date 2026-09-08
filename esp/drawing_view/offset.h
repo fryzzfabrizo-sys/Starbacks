@@ -14,8 +14,8 @@
 #define kViewMatrixOff          0x80
 #define kProjMatrixOff          0xC0
 #define kBodyPartTransNode       0x10
-#define kHeadNode               0x630  // ← HEAD (JSON confirmed, было 0x638=HIP!)
-#define kHipNode                0x638  // ← HIP  (JSON confirmed)
+#define kHeadNode               0x638  // ← HEAD (JSON confirmed, было 0x638=HIP!)
+#define kHipNode                0x630  // ← HIP  (JSON confirmed)
 #define kLeftAnkleNode           0x670
 #define kRightAnkleNode          0x678
 #define kRightToeNode            0x688
