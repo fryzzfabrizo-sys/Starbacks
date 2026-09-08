@@ -11,18 +11,24 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// iOS ARM64 OB54 оффсеты (из OB53 dump + сдвиг)
-static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8; // m_LastAimingInfoFromWeapon
-static constexpr uint64_t kHit_RayDir         = 0x40;  // Vector3 RayDir (только это)
-static constexpr uint64_t kHit_StartPos       = 0x4C;  // Vector3 StartPosition (читаем)
+static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
+static constexpr uint64_t kHit_RayDir         = 0x40;
+static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr  = 0;
-static Vector3           g_tPos    = {};
-static Vector3           g_lPos    = {};
+static uint64_t          g_aimPtr = 0;
+static Vector3           g_tPos   = {};
+static Vector3           g_lPos   = {};
+
+// Отслеживаем смену матча
+static uint64_t          g_lastLocal = 0;
+
+static inline bool validPtr(uint64_t p) {
+    return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
+}
 
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
@@ -43,9 +49,8 @@ static void SilentWorker() {
             tPos = g_tPos;
             lPos = g_lPos;
         }
-        if (!isVaildPtr(h)) continue;
+        if (!validPtr(h)) continue;
 
-        // Читаем реальный StartPos из объекта
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
             origin = lPos;
@@ -57,7 +62,6 @@ static void SilentWorker() {
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x*inv, diff.y*inv, diff.z*inv };
 
-        // Пишем ТОЛЬКО RayDir — игра сама делает raycast и определяет хит
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
@@ -83,7 +87,18 @@ void RunSilentAim() {
         return;
     }
 
-    // Гранаты и IceWall не тратят ammo
+    // Фикс второго матча: localPlayer сменился = новый матч
+    if (local != g_lastLocal) {
+        g_lastLocal = local;
+        g_hasData.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lk(g_lock);
+            g_aimPtr = 0;
+        }
+        // Ждём пока aimPtr не станет валидным в новом матче
+        return;
+    }
+
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         g_hasData.store(false, std::memory_order_release);
@@ -91,7 +106,7 @@ void RunSilentAim() {
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-    if (!isVaildPtr(aimPtr)) {
+    if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
@@ -101,9 +116,6 @@ void RunSilentAim() {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
-
-    // +0.05 Y — как в Silent.cpp, чтобы попадать в центр головы
-    tPos.y += 0.05f;
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
@@ -116,6 +128,7 @@ void RunSilentAim() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
+    g_lastLocal = 0;
     std::lock_guard<std::mutex> lk(g_lock);
     g_aimPtr = 0;
 }
