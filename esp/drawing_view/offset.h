@@ -14,8 +14,8 @@
 #define kViewMatrixOff          0x80
 #define kProjMatrixOff          0xC0
 #define kBodyPartTransNode       0x10
-#define kHeadNode               0x638
-#define kHipNode                0x640
+#define kHeadNode               0x630  // ← HEAD (JSON confirmed, было 0x638=HIP!)
+#define kHipNode                0x638  // ← HIP  (JSON confirmed)
 #define kLeftAnkleNode           0x670
 #define kRightAnkleNode          0x678
 #define kRightToeNode            0x688
@@ -44,12 +44,6 @@
 #define _0x28726BD 0x138// internal IUmaAvatar m_Avatar; // 0x118 internal IUmaAvatar EEAGBKBMBLD; // 0x128
 
 #define _0x2872DCF 0x101// private bool IsVisible; // 0x101
-
-// BitArrayBoolean visibility — Player.DBBGJDEAKPM (OB54 confirmed)
-#define kVisibleBitArray     0xA40   // protected BitArrayBoolean DBBGJDEAKPM
-#define kBitArray_mValue     0x10    // BitArray.m_Value (uint32)
-#define kISVisibleAlive      32      // ISVISIBLE_ALIVE — player is alive/valid
-#define kISVisibleCamera     1       // ISVISIBLE_CAMERA — in camera frustum
 
 
 #define kMainCameraTransform    0x380
@@ -81,4 +75,23 @@
 #define kShootNoReload          0xD9    // public bool ShootNoReload
 #define kFastFireOff            0x208  // Tốc độ bắn (Fast Fire)
 #define kFollowCamera            0x628   // LocalPlayer -> FollowCamera
-#define kFOVOffset               0x70
+#define kFOVOffset               0x70 
+// Velocity prediction (OB54)
+#define kPhysCCT          0x200   // PhysicalCCT pointer on Player
+#define kPhysCCT_Velocity 0x17C   // Vector3 Velocity in PhysicalCCT
+
+// Bone nodes OB54 (OB53 - 8)
+#define kChestNode        0x640   // Breast (JSON confirmed)
+#define kNeckNode         0x640   // hip/neck position
+
+// Silent aim check
+#define kSAim1            0x7D8   // IFCJGLEOGDD bool (IsPrepareAttack, same OB53/OB54)
+
+// Из Offsets.json (@THE_LION_CHEATS) — OB54 подтверждено
+#define kLockAimCollider        0x140  // LockAimCollider_Backing (для silent aim HitCollider)
+#define kAimCollider_Ptr        0x6C8  // AimCollider_Ptr (aim collider на Player)
+#define kFollowCamera_Ptr       0x620  // FollowCamera_Ptr
+#define kIsFire_Backing         0x7D0  // IsFire_Backing (JSON: 0x7D0)
+#define kLastAimInfo_Alt        0xDC4  // LastAimInfo_Ptr Android ref (iOS = 0xDC8)
+#define kIsVisible_Uma          0x100  // IsVisible offset в umaData
+#define kUmaData                0x30   // umaData offset внутри AvatarManager
