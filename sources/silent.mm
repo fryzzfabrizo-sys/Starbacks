@@ -39,7 +39,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 // ======== Поток – пишет RayDir постоянно ========
 static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::microseconds(1)); // 1 мкс – частота ~1 МГц, но достаточно
+        std::this_thread::sleep_for(std::chrono::nanoseconds(0)); // 1 мкс – частота ~1 МГц, но достаточно
 
         if (!g_enabled.load(std::memory_order_relaxed)) continue;
 
