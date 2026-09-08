@@ -16,7 +16,7 @@ extern uint64_t g_SilentBestTarget; // перезаписываем здесь
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
-static constexpr uint64_t kAimRotation        = 0x5AC;   // из offset.h
+
 
 // Четыре слота HitObjectInfo в Player (OB54)
 static constexpr uint64_t kHitObjOffs[4] = {
