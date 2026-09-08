@@ -760,7 +760,10 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                         matrixVpWidth:(CGFloat)vpW matrixVpHeight:(CGFloat)vpH {
 
     ESPFrameStats stats = {0, 0, false};
-    if (!buffers || Moudule_Base == -1 || IsAtLobby(Moudule_Base)) return stats;
+    if (!buffers || Moudule_Base == -1 || IsAtLobby(Moudule_Base)) {
+        ResetSilentAim(); // фикс второго матча — сбрасываем при выходе в лобби
+        return stats;
+    }
 
     cacheRefreshTick++;
     if (cacheRefreshTick > 15 ||
@@ -852,7 +855,7 @@ if(BackJump) {
     float    bestScore    = FLT_MAX;
     float    bestDistance = FLT_MAX;
 
-    const float aimFovSq  = (isAimbot || aimsilent1) ? aimFov * aimFov : 0.0f;
+    const float aimFovSq  = isAimbot ? aimFov * aimFov : (aimsilent1 ? 1e12f : 0.0f);
     const float safeDist  = fmaxf(aimDistance, 1.0f);
     const float safeFovSq = fmaxf(aimFovSq, 1.0f);
     const uint64_t base   = entriesArr + kIl2CppArrayItems;
@@ -880,7 +883,7 @@ Vector3 aimPos = headPos;
 
         bool    isKnocked = get_IsKnockedDown(pawn);
         
-        bool aimVis = getIsVisible(pawn);
+        bool aimVis = (hp > 0) && getIsVisible(pawn);
 
         bool    espVis   = aimVis || isKnocked;
 
@@ -888,7 +891,7 @@ Vector3 aimPos = headPos;
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
-            if (!isAimCheckVisible && !aimVis)    valid = NO;
+            if (!isAimCheckVisible && !aimVis && !aimsilent1) valid = NO;
 
             if (valid) {
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix,
@@ -898,14 +901,16 @@ Vector3 aimPos = headPos;
                     bool behindCam = (w2s.z <= 0.001f);
                     float dx = behindCam ? 0.0f : w2s.x - center.x;
                     float dy = behindCam ? 0.0f : w2s.y - center.y;
-                    float dSq = dx * dx + dy * dy;
+                    float dSq = behindCam ? 1e10f : dx*dx + dy*dy;
 
                     if (dSq <= aimFovSq) {
                         float cn = dSq / safeFovSq;
                         float dn = dis  / safeDist;
                         float score;
 
-                        if (aimTargetMode == 0)
+                        if (aimsilent1 && !isAimbot)
+                            score = cn; // silent: только центр экрана
+                        else if (aimTargetMode == 0)
                             score = cn * 0.85f + dn * 0.15f;
                         else if (aimTargetMode == 1)
                             score = fminf((float)hp / 200.0f, 1.5f) * 0.65f
