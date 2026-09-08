@@ -47,8 +47,8 @@ static Vector3 HeadPos(uint64_t pawn) {
 static void SilentWorker() {
     while (true) {
         // Если yield() не даёт результата, замените на:
-        // std::this_thread::sleep_for(std::chrono::nanoseconds(1));
-        std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::nanoseconds(1));
+        //std::this_thread::yield();
 
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
