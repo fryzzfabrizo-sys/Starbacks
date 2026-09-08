@@ -36,10 +36,11 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(head) ? getPositionExt(head) : Vector3{};
 }
 
-// ======== Поток – пишет RayDir постоянно ========
+// ======== Поток – с минимальной задержкой ========
 static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::nanoseconds(0)); // 1 мкс – частота ~1 МГц, но достаточно
+        // Минимальная задержка – 1 наносекунда, чтобы поток не монополизировал CPU
+        std::this_thread::sleep_for(std::chrono::nanoseconds(1));
 
         if (!g_enabled.load(std::memory_order_relaxed)) continue;
 
@@ -57,7 +58,7 @@ static void SilentWorker() {
 
         Vector3 localHead = HeadPos(local);
         if (localHead.x == 0.0f && localHead.y == 0.0f && localHead.z == 0.0f)
-            localHead = getPositionExt(getHip(local)); // fallback
+            localHead = getPositionExt(getHip(local));
 
         for (int i = 0; i < 4; ++i) {
             uint64_t hitObj = ReadAddr<uint64_t>(local + kHitObjOffs[i]);
@@ -75,7 +76,7 @@ static void SilentWorker() {
             Vector3 dir = diff * inv;
 
             WriteAddr<Vector3>(hitObj + kHit_RayDir, dir);
-            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f); // зануляем разброс
+            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
         }
     }
 }
@@ -114,7 +115,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Проверка на гранаты / IceWall
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         ResetSilentAim();
