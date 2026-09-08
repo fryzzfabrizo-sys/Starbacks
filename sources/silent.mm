@@ -57,7 +57,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 // ======== Поток, пишущий RayDir во все 4 слота ========
 static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::nanoseconds(0));
+        std::this_thread::sleep_for(std::chrono::nanoseconds(2));
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
         uint64_t local;
