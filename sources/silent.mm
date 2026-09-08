@@ -1,6 +1,5 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
-#import "../esp/drawing_view/offset.h"
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
@@ -8,76 +7,62 @@
 #include <mutex>
 #include <thread>
 
+extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
-extern uint64_t g_SilentBestTarget;
 
-// ======== Оффсеты ========
-static constexpr uint64_t kHit_RayDir   = 0x40;
-static constexpr uint64_t kHit_StartPos = 0x4C;
-static constexpr uint64_t kHit_Scatter  = 0x5C;
-static constexpr uint64_t kWpn_CostAmmo = 0x7B8;
-
-// Четыре слота HitObjectInfo
-static constexpr uint64_t kHitObjOffs[4] = {
-    0xDC8, 0xDD0, 0xA90, 0xAA0
-};
+static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
+static constexpr uint64_t kHit_RayDir         = 0x40;
+static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 
 static std::mutex        g_lock;
+static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static uint64_t          g_localPlayer = 0;
-static uint64_t          g_targetPlayer = 0;
-static std::atomic<bool> g_enabled{false};
+static uint64_t          g_aimPtr = 0;
+static Vector3           g_tPos   = {};
+static Vector3           g_lPos   = {};
 
-// ======== Получение позиции головы ========
-static Vector3 HeadPos(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return Vector3{};
-    uint64_t head = getHead(pawn);
-    return isVaildPtr(head) ? getPositionExt(head) : Vector3{};
+// Отслеживаем смену матча
+static uint64_t          g_lastLocal = 0;
+
+static inline bool validPtr(uint64_t p) {
+    return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
 
-// ======== Поток – с минимальной задержкой ========
+static Vector3 HeadPos(uint64_t pawn) {
+    if (!isVaildPtr(pawn)) return {};
+    uint64_t t = getHead(pawn);
+    return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
+}
+
 static void SilentWorker() {
     while (true) {
-        // Минимальная задержка – 1 наносекунда, чтобы поток не монополизировал CPU
         std::this_thread::sleep_for(std::chrono::nanoseconds(1));
+        if (!g_hasData.load(std::memory_order_acquire)) continue;
 
-        if (!g_enabled.load(std::memory_order_relaxed)) continue;
-
-        uint64_t local, target;
+        uint64_t h;
+        Vector3  tPos, lPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            local  = g_localPlayer;
-            target = g_targetPlayer;
+            h    = g_aimPtr;
+            tPos = g_tPos;
+            lPos = g_lPos;
         }
+        if (!validPtr(h)) continue;
 
-        if (!isVaildPtr(local) || !isVaildPtr(target)) continue;
+        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+            origin = lPos;
 
-        Vector3 targetHead = HeadPos(target);
-        if (targetHead.x == 0.0f && targetHead.y == 0.0f && targetHead.z == 0.0f) continue;
+        Vector3 diff  = { tPos.x-origin.x, tPos.y-origin.y, tPos.z-origin.z };
+        float   lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
+        if (lenSq <= 0.0001f) continue;
 
-        Vector3 localHead = HeadPos(local);
-        if (localHead.x == 0.0f && localHead.y == 0.0f && localHead.z == 0.0f)
-            localHead = getPositionExt(getHip(local));
+        float   inv = 1.0f / std::sqrt(lenSq);
+        Vector3 dir = { diff.x*inv, diff.y*inv, diff.z*inv };
 
-        for (int i = 0; i < 4; ++i) {
-            uint64_t hitObj = ReadAddr<uint64_t>(local + kHitObjOffs[i]);
-            if (!isVaildPtr(hitObj)) continue;
-
-            Vector3 start = ReadAddr<Vector3>(hitObj + kHit_StartPos);
-            if (start.x == 0.0f && start.y == 0.0f && start.z == 0.0f)
-                start = localHead;
-
-            Vector3 diff = targetHead - start;
-            float lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
-            if (lenSq <= 0.0001f) continue;
-
-            float inv = 1.0f / std::sqrt(lenSq);
-            Vector3 dir = diff * inv;
-
-            WriteAddr<Vector3>(hitObj + kHit_RayDir, dir);
-            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
-        }
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
 
@@ -87,44 +72,63 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
-void ResetSilentAim() {
-    g_enabled.store(false, std::memory_order_relaxed);
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_localPlayer = 0;
-    g_targetPlayer = 0;
-    g_SilentBestTarget = 0;
-}
-
 void RunSilentAim() {
     InitSilentAimThread();
 
     if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
-        ResetSilentAim();
+        g_hasData.store(false, std::memory_order_release);
         return;
     }
 
-    uint64_t local = getLocalPlayer(cachedMatch);
-    if (!isVaildPtr(local) || get_CurHP(local) <= 0) {
-        ResetSilentAim();
-        return;
-    }
-
+    uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
-    if (!isVaildPtr(target) || get_CurHP(target) <= 0) {
-        ResetSilentAim();
+    if (!isVaildPtr(local) || !isVaildPtr(target)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    // Фикс второго матча: localPlayer сменился = новый матч
+    if (local != g_lastLocal) {
+        g_lastLocal = local;
+        g_hasData.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lk(g_lock);
+            g_aimPtr = 0;
+        }
+        // Ждём пока aimPtr не станет валидным в новом матче
         return;
     }
 
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
-        ResetSilentAim();
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
+    if (!validPtr(aimPtr)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    Vector3 tPos = HeadPos(target);
+    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
+        g_hasData.store(false, std::memory_order_release);
         return;
     }
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_localPlayer = local;
-        g_targetPlayer = target;
+        g_aimPtr = aimPtr;
+        g_tPos   = tPos;
+        g_lPos   = HeadPos(local);
     }
-    g_enabled.store(true, std::memory_order_relaxed);
+    g_hasData.store(true, std::memory_order_release);
+}
+
+void ResetSilentAim() {
+    g_hasData.store(false, std::memory_order_release);
+    g_lastLocal = 0;
+    std::lock_guard<std::mutex> lk(g_lock);
+    g_aimPtr = 0;
 }
