@@ -50,20 +50,15 @@ bool getIsVisible(uint64_t playerPawn) {
     // HP guard
     if (get_CurHP(playerPawn) <= 0) return false;
 
-    // UmaAvatar chain (JSON подтверждено: IsVisible = AvatarMgr+0x30+0x100)
-    uint64_t avatarMgr = ReadAddr<uint64_t>(playerPawn + _0x27276BC); // +0x708
-    if (avatarMgr < 0x100000000ULL) return true; // не крашим если нет
+    // UmaAvatar chain — безопасный visible check (BitArrayBoolean крашит)
+    // Строгая iOS ARM64 проверка: >= 4GB
+    uint64_t avatarMgr = ReadAddr<uint64_t>(playerPawn + _0x27276BC);
+    if (avatarMgr < 0x100000000ULL || avatarMgr > 0x0000FFFFFFFFFFFFULL) return true;
 
-    // Попробуем JSON цепочку: avatarMgr + 0x30 → umaData → +0x100 = IsVisible
-    uint64_t umaData = ReadAddr<uint64_t>(avatarMgr + 0x30);
-    if (umaData >= 0x100000000ULL) {
-        return ReadAddr<bool>(umaData + 0x100);
-    }
+    uint64_t umaAvatar = ReadAddr<uint64_t>(avatarMgr + _0x28726BD);
+    if (umaAvatar < 0x100000000ULL || umaAvatar > 0x0000FFFFFFFFFFFFULL) return true;
 
-    // Fallback: старая цепочка
-    uint64_t umaAvatar = ReadAddr<uint64_t>(avatarMgr + _0x28726BD); // +0x138
-    if (umaAvatar < 0x100000000ULL) return true;
-    return ReadAddr<bool>(umaAvatar + _0x2872DCF); // +0x101
+    return ReadAddr<bool>(umaAvatar + _0x2872DCF);
 }
 
 static void TipaReadMatrix16(uint64_t addr, float *out) {
