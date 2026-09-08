@@ -12,7 +12,7 @@ extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 extern uint64_t g_SilentBestTarget;
 
-// ======== Оффсеты (кроме kAimRotation, уже есть в offset.h) ========
+// ======== Оффсеты ========
 static constexpr uint64_t kHit_RayDir   = 0x40;
 static constexpr uint64_t kHit_StartPos = 0x4C;
 static constexpr uint64_t kHit_Scatter  = 0x5C;
@@ -24,24 +24,25 @@ static constexpr uint64_t kHitObjOffs[4] = {
 };
 
 static std::mutex        g_lock;
-static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
 static uint64_t          g_localPlayer = 0;
 static uint64_t          g_targetPlayer = 0;
+static std::atomic<bool> g_enabled{false};
 
-// ======== Вспомогательные функции ========
+// ======== Получение позиции головы ========
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return Vector3{};
     uint64_t head = getHead(pawn);
     return isVaildPtr(head) ? getPositionExt(head) : Vector3{};
 }
 
-// ======== Поток ========
+// ======== Поток – без sleep_for, работает непрерывно ========
 static void SilentWorker() {
     while (true) {
+        // yield() уступает процессор другим потокам, но не создаёт задержки
         std::this_thread::yield();
 
-        if (!g_hasData.load(std::memory_order_relaxed)) continue;
+        if (!g_enabled.load(std::memory_order_relaxed)) continue;
 
         uint64_t local, target;
         {
@@ -49,25 +50,24 @@ static void SilentWorker() {
             local  = g_localPlayer;
             target = g_targetPlayer;
         }
-        if (!isVaildPtr(local) || !isVaildPtr(target)) {
-            g_hasData.store(false, std::memory_order_relaxed);
-            continue;
-        }
 
+        if (!isVaildPtr(local) || !isVaildPtr(target)) continue;
+
+        // Актуальная позиция головы цели – читаем каждый раз
         Vector3 targetHead = HeadPos(target);
-        if (targetHead.x == 0.0f && targetHead.y == 0.0f && targetHead.z == 0.0f) {
-            g_hasData.store(false, std::memory_order_relaxed);
-            continue;
-        }
+        if (targetHead.x == 0.0f && targetHead.y == 0.0f && targetHead.z == 0.0f) continue;
 
+        // Позиция головы игрока (fallback – таз)
         Vector3 localHead = HeadPos(local);
         if (localHead.x == 0.0f && localHead.y == 0.0f && localHead.z == 0.0f)
             localHead = getPositionExt(getHip(local));
 
+        // Записываем во все 4 слота
         for (int i = 0; i < 4; ++i) {
             uint64_t hitObj = ReadAddr<uint64_t>(local + kHitObjOffs[i]);
             if (!isVaildPtr(hitObj)) continue;
 
+            // StartPosition – точка вылета
             Vector3 start = ReadAddr<Vector3>(hitObj + kHit_StartPos);
             if (start.x == 0.0f && start.y == 0.0f && start.z == 0.0f)
                 start = localHead;
@@ -79,7 +79,9 @@ static void SilentWorker() {
             float inv = 1.0f / std::sqrt(lenSq);
             Vector3 dir = diff * inv;
 
+            // Пишем направление
             WriteAddr<Vector3>(hitObj + kHit_RayDir, dir);
+            // Зануляем разброс – строго в голову
             WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
         }
     }
@@ -91,16 +93,14 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
-// ======== Сброс ========
 void ResetSilentAim() {
-    g_hasData.store(false, std::memory_order_relaxed);
+    g_enabled.store(false, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(g_lock);
-    g_localPlayer  = 0;
+    g_localPlayer = 0;
     g_targetPlayer = 0;
     g_SilentBestTarget = 0;
 }
 
-// ======== Основная функция ========
 void RunSilentAim() {
     InitSilentAimThread();
 
@@ -121,6 +121,7 @@ void RunSilentAim() {
         return;
     }
 
+    // Гранаты / IceWall
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         ResetSilentAim();
@@ -129,8 +130,8 @@ void RunSilentAim() {
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_localPlayer  = local;
+        g_localPlayer = local;
         g_targetPlayer = target;
     }
-    g_hasData.store(true, std::memory_order_relaxed);
+    g_enabled.store(true, std::memory_order_relaxed);
 }
