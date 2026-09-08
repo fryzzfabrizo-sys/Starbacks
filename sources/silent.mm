@@ -1,6 +1,6 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
-#import "../esp/drawing_view/offset.h"
+#import "../drawing_view/offset.h"
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
@@ -10,14 +10,13 @@
 
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
-extern uint64_t g_SilentBestTarget;   // используется как указатель на цель
+extern uint64_t g_SilentBestTarget;
 
-// ======== Оффсеты ========
+// ======== Оффсеты (кроме kAimRotation, уже есть в offset.h) ========
 static constexpr uint64_t kHit_RayDir   = 0x40;
 static constexpr uint64_t kHit_StartPos = 0x4C;
-static constexpr uint64_t kHit_Scatter  = 0x5C;   // разброс пули
+static constexpr uint64_t kHit_Scatter  = 0x5C;
 static constexpr uint64_t kWpn_CostAmmo = 0x7B8;
-static constexpr uint64_t kAimRotation  = 0x5AC;  // из offset.h
 
 // Четыре слота HitObjectInfo
 static constexpr uint64_t kHitObjOffs[4] = {
@@ -28,7 +27,7 @@ static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
 static uint64_t          g_localPlayer = 0;
-static uint64_t          g_targetPlayer = 0;   // указатель на врага
+static uint64_t          g_targetPlayer = 0;
 
 // ======== Вспомогательные функции ========
 static Vector3 HeadPos(uint64_t pawn) {
@@ -37,20 +36,10 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(head) ? getPositionExt(head) : Vector3{};
 }
 
-static Vector3 GetForwardFromPlayer(uint64_t player) {
-    Quaternion q = ReadAddr<Quaternion>(player + kAimRotation);
-    float x = q.x, y = q.y, z = q.z, w = q.w;
-    return {
-        2 * (x*z + w*y),
-        2 * (y*z - w*x),
-        1 - 2 * (x*x + y*y)
-    };
-}
-
-// ======== Поток – пишет RayDir в реальном времени ========
+// ======== Поток ========
 static void SilentWorker() {
     while (true) {
-        std::this_thread::yield();   // без задержки – максимальная частота
+        std::this_thread::yield();
 
         if (!g_hasData.load(std::memory_order_relaxed)) continue;
 
@@ -65,9 +54,6 @@ static void SilentWorker() {
             continue;
         }
 
-        // Проверяем, стреляет ли игрок (опционально)
-        // if (!get_IsFiring(local)) continue;
-
         Vector3 targetHead = HeadPos(target);
         if (targetHead.x == 0.0f && targetHead.y == 0.0f && targetHead.z == 0.0f) {
             g_hasData.store(false, std::memory_order_relaxed);
@@ -76,14 +62,12 @@ static void SilentWorker() {
 
         Vector3 localHead = HeadPos(local);
         if (localHead.x == 0.0f && localHead.y == 0.0f && localHead.z == 0.0f)
-            localHead = getPositionExt(getHip(local)); // fallback
+            localHead = getPositionExt(getHip(local));
 
-        // Пишем во все 4 слота
         for (int i = 0; i < 4; ++i) {
             uint64_t hitObj = ReadAddr<uint64_t>(local + kHitObjOffs[i]);
             if (!isVaildPtr(hitObj)) continue;
 
-            // StartPosition – точка вылета
             Vector3 start = ReadAddr<Vector3>(hitObj + kHit_StartPos);
             if (start.x == 0.0f && start.y == 0.0f && start.z == 0.0f)
                 start = localHead;
@@ -95,10 +79,7 @@ static void SilentWorker() {
             float inv = 1.0f / std::sqrt(lenSq);
             Vector3 dir = diff * inv;
 
-            // Пишем направление
             WriteAddr<Vector3>(hitObj + kHit_RayDir, dir);
-
-            // Зануляем разброс, чтобы игра не добавляла случайность
             WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
         }
     }
@@ -110,7 +91,16 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
-// ======== Вызывается из esp.mm каждый кадр для обновления цели ========
+// ======== Сброс ========
+void ResetSilentAim() {
+    g_hasData.store(false, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lk(g_lock);
+    g_localPlayer  = 0;
+    g_targetPlayer = 0;
+    g_SilentBestTarget = 0;
+}
+
+// ======== Основная функция ========
 void RunSilentAim() {
     InitSilentAimThread();
 
@@ -125,33 +115,22 @@ void RunSilentAim() {
         return;
     }
 
-    // Используем цель, вычисленную в esp.mm (g_SilentBestTarget)
     uint64_t target = g_SilentBestTarget;
     if (!isVaildPtr(target) || get_CurHP(target) <= 0) {
         ResetSilentAim();
         return;
     }
 
-    // Проверка на гранаты / IceWall
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         ResetSilentAim();
         return;
     }
 
-    // Обновляем данные для потока
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_localPlayer  = local;
         g_targetPlayer = target;
     }
     g_hasData.store(true, std::memory_order_relaxed);
-}
-
-void ResetSilentAim() {
-    g_hasData.store(false, std::memory_order_relaxed);
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_localPlayer  = 0;
-    g_targetPlayer = 0;
-    g_SilentBestTarget = 0;
 }
