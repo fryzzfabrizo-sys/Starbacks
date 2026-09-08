@@ -36,11 +36,10 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(head) ? getPositionExt(head) : Vector3{};
 }
 
-// ======== Поток – без sleep_for, работает непрерывно ========
+// ======== Поток – пишет RayDir постоянно ========
 static void SilentWorker() {
     while (true) {
-        // yield() уступает процессор другим потокам, но не создаёт задержки
-        std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::microseconds(1)); // 1 мкс – частота ~1 МГц, но достаточно
 
         if (!g_enabled.load(std::memory_order_relaxed)) continue;
 
@@ -53,21 +52,17 @@ static void SilentWorker() {
 
         if (!isVaildPtr(local) || !isVaildPtr(target)) continue;
 
-        // Актуальная позиция головы цели – читаем каждый раз
         Vector3 targetHead = HeadPos(target);
         if (targetHead.x == 0.0f && targetHead.y == 0.0f && targetHead.z == 0.0f) continue;
 
-        // Позиция головы игрока (fallback – таз)
         Vector3 localHead = HeadPos(local);
         if (localHead.x == 0.0f && localHead.y == 0.0f && localHead.z == 0.0f)
-            localHead = getPositionExt(getHip(local));
+            localHead = getPositionExt(getHip(local)); // fallback
 
-        // Записываем во все 4 слота
         for (int i = 0; i < 4; ++i) {
             uint64_t hitObj = ReadAddr<uint64_t>(local + kHitObjOffs[i]);
             if (!isVaildPtr(hitObj)) continue;
 
-            // StartPosition – точка вылета
             Vector3 start = ReadAddr<Vector3>(hitObj + kHit_StartPos);
             if (start.x == 0.0f && start.y == 0.0f && start.z == 0.0f)
                 start = localHead;
@@ -79,10 +74,8 @@ static void SilentWorker() {
             float inv = 1.0f / std::sqrt(lenSq);
             Vector3 dir = diff * inv;
 
-            // Пишем направление
             WriteAddr<Vector3>(hitObj + kHit_RayDir, dir);
-            // Зануляем разброс – строго в голову
-            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
+            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f); // зануляем разброс
         }
     }
 }
@@ -121,7 +114,7 @@ void RunSilentAim() {
         return;
     }
 
-    // Гранаты / IceWall
+    // Проверка на гранаты / IceWall
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         ResetSilentAim();
