@@ -14,8 +14,8 @@
 #define kViewMatrixOff          0x80
 #define kProjMatrixOff          0xC0
 #define kBodyPartTransNode       0x10
-#define kHeadNode               0x638  // ← HEAD (JSON confirmed, было 0x638=HIP!)
-#define kHipNode                0x630  // ← HIP  (JSON confirmed)
+#define kHeadNode               0x638  // ITransformNode Head
+#define kHipNode                0x640  // ITransformNode Hip
 #define kLeftAnkleNode           0x670
 #define kRightAnkleNode          0x678
 #define kRightToeNode            0x688
@@ -81,7 +81,7 @@
 #define kPhysCCT_Velocity 0x17C   // Vector3 Velocity in PhysicalCCT
 
 // Bone nodes OB54 (OB53 - 8)
-#define kChestNode        0x640   // Breast (JSON confirmed)
+#define kChestNode        0x648   // ITransformNode Breast/Chest
 #define kNeckNode         0x640   // hip/neck position
 
 // Silent aim check
@@ -95,3 +95,6 @@
 #define kLastAimInfo_Alt        0xDC4  // LastAimInfo_Ptr Android ref (iOS = 0xDC8)
 #define kIsVisible_Uma          0x100  // IsVisible offset в umaData
 #define kUmaData                0x30   // umaData offset внутри AvatarManager
+
+// Из Hooks.h: float PGCPFOAJHBM — разброс пули в GMPGMPFNMFP
+#define kHit_Scatter  0x5C
