@@ -1,145 +1,124 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
+#import "../esp/drawing_view/ESPPrefs.h"
 #import "mahoa.h"
-#include <cmath>
-#include <atomic>
-#include <chrono>
 #include <mutex>
 #include <thread>
-#include <pthread.h>
+#include <chrono>
 
+// ─── Extern: bestTarget được promote lên file scope trong esp.mm ───
+// GetClosestEnemysilent1() đọc thẳng từ đó — không cần pass thêm.
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// ======== Оффсеты ========
-static constexpr uint64_t kHit_RayDir   = 0x40;
-static constexpr uint64_t kHit_StartPos = 0x4C;
-static constexpr uint64_t kHit_Scatter  = 0x5C;
+// ─── Shared state giữa main thread và background thread ───────────
+static std::mutex  silentLock;
+static void       *g_HitObjInfo = nullptr;
+static Vector3     g_TargetPos  = {0.0f, 0.0f, 0.0f};
+static bool        g_HasData    = false;
 
-// Четыре слота HitObjectInfo (OB54)
-static constexpr uint64_t kHitObjOffs[4] = {
-    0xDC8, 0xDD0, 0xA90, 0xAA0
-};
-
-static std::mutex        g_lock;
-static std::atomic<bool> g_hasData{false};
-static std::atomic<bool> g_started{false};
-static uint64_t          g_localPlayer = 0;
-static Vector3           g_tPos   = {};
-static Vector3           g_lPos   = {};
-static uint64_t          g_lastLocal = 0;
-
-static inline bool validPtr(uint64_t p) {
-    return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
+// ─── Helper: lấy enemy gần nhất từ g_SilentBestTarget ─────────────
+static uint64_t GetClosestEnemysilent1() {
+    if (!isVaildPtr(g_SilentBestTarget)) return 0;
+    return g_SilentBestTarget;
 }
 
-static Vector3 HeadPos(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return {};
-    uint64_t t = getHead(pawn);
-    return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
+// ─── Helper: lấy vị trí đầu địch ─────────────────────────────────
+static Vector3 GetHeadPosition(uint64_t pawn) {
+    if (!isVaildPtr(pawn)) return {0.0f, 0.0f, 0.0f};
+    uint64_t headTrans = getHead(pawn);
+    if (!isVaildPtr(headTrans)) return {0.0f, 0.0f, 0.0f};
+    return getPositionExt(headTrans);
 }
 
-// ======== ПОТОК С МАКСИМАЛЬНЫМ ПРИОРИТЕТОМ ========
-static void SilentWorker() {
-    // Повышаем приоритет
-    pthread_t thread = pthread_self();
-    struct sched_param param;
-    int policy;
-    pthread_getschedparam(thread, &policy, &param);
-    param.sched_priority = sched_get_priority_max(policy);
-    pthread_setschedparam(thread, policy, &param);
-
+// ─── Background thread: redirect trajectory của viên đạn ──────────
+// Đọc HitObjectInfo từ shared state, ghi lại direction và target pos.
+// offset +0x4C: vị trí gốc viên đạn (ammo base)
+// offset +0x40: direction vector (ghi đè)
+// offset +0x28: target position  (ghi đè)
+static void AimSilentThread() {
     while (true) {
-        // Минимальная задержка – для максимальной частоты
-        std::this_thread::sleep_for(std::chrono::nanoseconds(1));
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
+        if (!g_HasData) continue;
 
-        // ПРОВЕРКА: если нет данных – пропускаем, но продолжаем цикл
-        if (!g_hasData.load(std::memory_order_acquire)) continue;
+        silentLock.lock();
+        void   *currentHitObj = g_HitObjInfo;
+        Vector3 targetPos     = g_TargetPos;
+        bool    valid         = g_HasData;
+        silentLock.unlock();
 
-        uint64_t local;
-        Vector3  tPos, lPos;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            local = g_localPlayer;
-            tPos  = g_tPos;
-            lPos  = g_lPos;
-        }
-        if (!validPtr(local)) continue;
+        if (!valid || !currentHitObj) continue;
 
-        // Перебираем все 4 слота
-        for (int i = 0; i < 4; ++i) {
-            uint64_t hitObj = ReadAddr<uint64_t>(local + kHitObjOffs[i]);
-            if (!validPtr(hitObj)) continue;
+        // Đọc vị trí gốc viên đạn
+        Vector3 ammoBase = *(Vector3 *)((uint64_t)currentHitObj + 0x4C);
 
-            Vector3 origin = ReadAddr<Vector3>(hitObj + kHit_StartPos);
-            if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-                origin = lPos;
+        // Tính direction vector: target − origin
+        Vector3 dir;
+        dir.x = targetPos.x - ammoBase.x;
+        dir.y = targetPos.y - ammoBase.y;
+        dir.z = targetPos.z - ammoBase.z;
 
-            // ---- ПИШЕМ НЕНОРМАЛИЗОВАННЫЙ ВЕКТОР (diff) ----
-            Vector3 diff = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
-            WriteAddr<Vector3>(hitObj + kHit_RayDir, diff);
-            // Зануляем разброс
-            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
-        }
+        // Ghi đè direction và target vào HitObjectInfo
+        *(Vector3 *)((uint64_t)currentHitObj + 0x40) = dir;
+        *(Vector3 *)((uint64_t)currentHitObj + 0x28) = targetPos;
     }
 }
 
-void InitSilentAimThread() {
-    bool exp = false;
-    if (g_started.compare_exchange_strong(exp, true))
-        std::thread(SilentWorker).detach();
-}
-
-// ======== Основная функция, вызывается из esp.mm каждый кадр ========
+// ─── Gọi mỗi frame từ renderESPWithBuffers ────────────────────────
 void RunSilentAim() {
-    InitSilentAimThread();
-
-    // Если сайлент выключен или нет матча – останавливаем запись
-    if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
-    uint64_t local = getLocalPlayer(cachedMatch);
-    uint64_t target = g_SilentBestTarget;
-    if (!isVaildPtr(local) || !isVaildPtr(target)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
-    // Сброс при смене матча
-    if (local != g_lastLocal) {
-        g_lastLocal = local;
-        g_hasData.store(false, std::memory_order_release);
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            g_localPlayer = 0;
+    // Feature tắt → flush data
+    if (!aimsilent1) {
+        if (g_HasData) {
+            silentLock.lock();
+            g_HasData    = false;
+            g_HitObjInfo = nullptr;
+            silentLock.unlock();
         }
         return;
     }
 
-    // ---- УБИРАЕМ ПРОВЕРКУ НА ГРАНАТЫ / ОРУЖИЕ ----
-    // Теперь пишем всегда, даже для гранат
+    if (!isVaildPtr(cachedMatch)) return;
 
-    Vector3 tPos = HeadPos(target);
-    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
-        g_hasData.store(false, std::memory_order_release);
+    uint64_t localPlayer = getLocalPlayer(cachedMatch);
+    if (!isVaildPtr(localPlayer)) return;
+
+    // Chỉ chạy khi đang bắn
+    if (!get_IsFiring(localPlayer)) {
+        if (g_HasData) {
+            silentLock.lock();
+            g_HasData    = false;
+            g_HitObjInfo = nullptr;
+            silentLock.unlock();
+        }
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_localPlayer = local;
-        g_tPos        = tPos;
-        g_lPos        = HeadPos(local); // fallback
+    uint64_t closestEnemy = GetClosestEnemysilent1();
+    if (!closestEnemy) {
+        if (g_HasData) {
+            silentLock.lock();
+            g_HasData    = false;
+            g_HitObjInfo = nullptr;
+            silentLock.unlock();
+        }
+        return;
     }
-    g_hasData.store(true, std::memory_order_release);
+
+    // Đọc HitObjectInfo từ local player + 0xDC8
+    void *hitObjInfo = *(void **)((uint64_t)localPlayer + 0xDC8);
+    if (!hitObjInfo) return;
+
+    Vector3 enemyHeadPos = GetHeadPosition(closestEnemy);
+
+    silentLock.lock();
+    g_HitObjInfo = hitObjInfo;
+    g_TargetPos  = enemyHeadPos;
+    g_HasData    = true;
+    silentLock.unlock();
 }
 
-void ResetSilentAim() {
-    g_hasData.store(false, std::memory_order_release);
-    g_lastLocal = 0;
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_localPlayer = 0;
+// ─── Gọi 1 lần khi HUD khởi động ─────────────────────────────────
+void InitSilentAimThread() {
+    std::thread(AimSilentThread).detach();
 }
