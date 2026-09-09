@@ -6,7 +6,7 @@
 #include <chrono>
 #include <mutex>
 #include <thread>
-#include <pthread.h>   // для приоритета
+#include <pthread.h>
 
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
@@ -16,7 +16,6 @@ extern bool     aimsilent1;
 static constexpr uint64_t kHit_RayDir   = 0x40;
 static constexpr uint64_t kHit_StartPos = 0x4C;
 static constexpr uint64_t kHit_Scatter  = 0x5C;
-static constexpr uint64_t kWpn_CostAmmo = 0x7B8;
 
 // Четыре слота HitObjectInfo (OB54)
 static constexpr uint64_t kHitObjOffs[4] = {
@@ -43,7 +42,6 @@ static Vector3 HeadPos(uint64_t pawn) {
 
 // ======== ПОТОК С МАКСИМАЛЬНЫМ ПРИОРИТЕТОМ ========
 static void SilentWorker() {
-    // --- Устанавливаем максимальный приоритет для потока ---
     pthread_t thread = pthread_self();
     struct sched_param param;
     int policy;
@@ -52,8 +50,6 @@ static void SilentWorker() {
     pthread_setschedparam(thread, policy, &param);
 
     while (true) {
-        // --- Минимальная задержка: 1 наносекунда ---
-        // Это даёт максимально возможную частоту записи.
         std::this_thread::sleep_for(std::chrono::nanoseconds(1));
 
         if (!g_hasData.load(std::memory_order_acquire)) continue;
@@ -68,7 +64,7 @@ static void SilentWorker() {
         }
         if (!validPtr(local)) continue;
 
-        // Пишем во все 4 слота
+        // Пишем во все 4 слота без проверки на оружие
         for (int i = 0; i < 4; ++i) {
             uint64_t hitObj = ReadAddr<uint64_t>(local + kHitObjOffs[i]);
             if (!validPtr(hitObj)) continue;
@@ -85,7 +81,7 @@ static void SilentWorker() {
             Vector3 dir = { diff.x*inv, diff.y*inv, diff.z*inv };
 
             WriteAddr<Vector3>(hitObj + kHit_RayDir, dir);
-            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f); // зануляем разброс
+            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
         }
     }
 }
@@ -96,7 +92,7 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
-// ======== Основная функция, вызывается из esp.mm ========
+// ======== Основная функция ========
 void RunSilentAim() {
     InitSilentAimThread();
 
@@ -112,7 +108,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Сброс при смене матча
     if (local != g_lastLocal) {
         g_lastLocal = local;
         g_hasData.store(false, std::memory_order_release);
@@ -123,14 +118,9 @@ void RunSilentAim() {
         return;
     }
 
-    // Гранаты / IceWall – пропускаем
-    uint64_t wpn = WeaponOnHand(local);
-    if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
+    // ---- УБИРАЕМ ПРОВЕРКУ НА ГРАНАТЫ ----
+    // Теперь пишем всегда, даже для гранат
 
-    // Позиция головы цели – БЕЗ +0.05 Y
     Vector3 tPos = HeadPos(target);
     if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
         g_hasData.store(false, std::memory_order_release);
@@ -141,7 +131,7 @@ void RunSilentAim() {
         std::lock_guard<std::mutex> lk(g_lock);
         g_localPlayer = local;
         g_tPos        = tPos;
-        g_lPos        = HeadPos(local); // fallback
+        g_lPos        = HeadPos(local);
     }
     g_hasData.store(true, std::memory_order_release);
 }
