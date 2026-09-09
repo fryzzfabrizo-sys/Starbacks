@@ -23,10 +23,9 @@ static std::atomic<bool> g_started{false};
 static uint64_t          g_aimPtr  = 0;
 static Vector3           g_tPos    = {};
 static Vector3           g_lPos    = {};
-// Переменные для расчета упреждения (velocity)
-static Vector3           g_lastTargetPos = {};
+// Переменные для отслеживания движения цели
+static Vector3           g_prevTargetPos = {};
 static Vector3           g_targetVelocity = {};
-static auto              g_lastTime = std::chrono::high_resolution_clock::now();
 
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
@@ -36,31 +35,31 @@ static Vector3 HeadPos(uint64_t pawn) {
 
 static void SilentWorker() {
     while (true) {
+        // Убираем задержки в наносекундах и используем yield для мгновенного отклика потока
         if (!g_hasData.load(std::memory_order_acquire)) {
             std::this_thread::yield();
             continue;
         }
 
         uint64_t h;
-        Vector3  tPos, lPos, velocity;
+        Vector3  tPos, lPos, vel;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h        = g_aimPtr;
-            tPos     = g_tPos;
-            lPos     = g_lPos;
-            velocity = g_targetVelocity;
+            h   = g_aimPtr;
+            tPos = g_tPos;
+            lPos = g_lPos;
+            vel = g_targetVelocity;
         }
         if (!isVaildPtr(h)) {
             g_hasData.store(false, std::memory_order_release);
             continue;
         }
 
-        // Предикшен: добавляем к позиции предсказанное смещение с учетом скорости цели
-        // Коэффициент 0.08f регулирует силу упреждения (можно подстроить под пинг/оружие)
-        Vector3 predictedPos = {
-            tPos.x + velocity.x * 0.08f,
-            tPos.y + velocity.y * 0.08f,
-            tPos.z + velocity.z * 0.08f
+        // Предикшен: компенсируем движение врага (коэффициент 0.06f можно чуть уменьшить/увеличить по вкусу)
+        Vector3 predPos = {
+            tPos.x + vel.x * 0.06f,
+            tPos.y + vel.y * 0.06f,
+            tPos.z + vel.z * 0.06f
         };
 
         // Читаем реальный StartPos из объекта
@@ -68,14 +67,14 @@ static void SilentWorker() {
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
             origin = lPos;
 
-        Vector3 diff  = { predictedPos.x - origin.x, predictedPos.y - origin.y, predictedPos.z - origin.z };
+        Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
         float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
         if (lenSq <= 0.0001f) continue;
 
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
-        // Пишем вектор направления луча
+        // Пишем вектор направления луча без пауз
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
@@ -91,6 +90,7 @@ void RunSilentAim() {
 
     if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos = {};
         return;
     }
 
@@ -98,6 +98,7 @@ void RunSilentAim() {
     uint64_t target = g_SilentBestTarget;
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos = {};
         return;
     }
 
@@ -105,43 +106,43 @@ void RunSilentAim() {
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos = {};
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!isVaildPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos = {};
         return;
     }
 
-    Vector3 currentHead = HeadPos(target);
-    if (currentHead.x == 0.0f && currentHead.y == 0.0f && currentHead.z == 0.0f) {
+    Vector3 tPos = HeadPos(target);
+    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos = {};
         return;
     }
 
-    // Расчет времени и скорости цели для упреждения в движении
-    auto now = std::chrono::high_resolution_clock::now();
-    float deltaTime = std::chrono::duration<float>(now - g_lastTime).count();
-    if (deltaTime > 0.001f && deltaTime < 0.1f) {
-        if (g_lastTargetPos.x != 0.0f || g_lastTargetPos.y != 0.0f || g_lastTargetPos.z != 0.0f) {
-            g_targetVelocity = {
-                (currentHead.x - g_lastTargetPos.x) / deltaTime,
-                (currentHead.y - g_lastTargetPos.y) / deltaTime,
-                (currentHead.z - g_lastTargetPos.z) / deltaTime
-            };
-        }
+    // Считаем примерную скорость цели между кадрами вызова
+    if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
+        g_targetVelocity = {
+            tPos.x - g_prevTargetPos.x,
+            tPos.y - g_prevTargetPos.y,
+            tPos.z - g_prevTargetPos.z
+        };
+    } else {
+        g_targetVelocity = {0, 0, 0};
     }
-    g_lastTargetPos = currentHead;
-    g_lastTime = now;
+    g_prevTargetPos = tPos;
 
     // Смещение в центр головы
-    currentHead.y += 0.05f;
+    tPos.y += 0.05f;
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = aimPtr;
-        g_tPos   = currentHead;
+        g_tPos   = tPos;
         g_lPos   = HeadPos(local);
     }
     g_hasData.store(true, std::memory_order_release);
@@ -151,6 +152,6 @@ void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lk(g_lock);
     g_aimPtr = 0;
-    g_lastTargetPos = {};
+    g_prevTargetPos = {};
     g_targetVelocity = {};
 }
