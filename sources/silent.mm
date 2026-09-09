@@ -33,10 +33,6 @@ static Vector3 GetHeadPosition(uint64_t pawn) {
 }
 
 // ─── Background thread: redirect trajectory của viên đạn ──────────
-// Đọc HitObjectInfo từ shared state, ghi lại direction và target pos.
-// offset +0x4C: vị trí gốc viên đạn (ammo base)
-// offset +0x40: direction vector (ghi đè)
-// offset +0x28: target position  (ghi đè)
 static void AimSilentThread() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::microseconds(1));
@@ -121,4 +117,13 @@ void RunSilentAim() {
 // ─── Gọi 1 lần khi HUD khởi động ─────────────────────────────────
 void InitSilentAimThread() {
     std::thread(AimSilentThread).detach();
+}
+
+// ─── Сброс состояния (добавлено для линковки с esp.mm) ──────────
+void ResetSilentAim() {
+    silentLock.lock();
+    g_HasData    = false;
+    g_HitObjInfo = nullptr;
+    g_TargetPos  = {0.0f, 0.0f, 0.0f};
+    silentLock.unlock();
 }
