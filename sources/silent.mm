@@ -42,6 +42,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 
 // ======== ПОТОК С МАКСИМАЛЬНЫМ ПРИОРИТЕТОМ ========
 static void SilentWorker() {
+    // Повышаем приоритет
     pthread_t thread = pthread_self();
     struct sched_param param;
     int policy;
@@ -50,8 +51,10 @@ static void SilentWorker() {
     pthread_setschedparam(thread, policy, &param);
 
     while (true) {
+        // Минимальная задержка – для максимальной частоты
         std::this_thread::sleep_for(std::chrono::nanoseconds(1));
 
+        // ПРОВЕРКА: если нет данных – пропускаем, но продолжаем цикл
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
         uint64_t local;
@@ -64,7 +67,7 @@ static void SilentWorker() {
         }
         if (!validPtr(local)) continue;
 
-        // Пишем во все 4 слота без проверки на оружие
+        // Перебираем все 4 слота
         for (int i = 0; i < 4; ++i) {
             uint64_t hitObj = ReadAddr<uint64_t>(local + kHitObjOffs[i]);
             if (!validPtr(hitObj)) continue;
@@ -73,14 +76,10 @@ static void SilentWorker() {
             if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
                 origin = lPos;
 
+            // ---- ПИШЕМ НЕНОРМАЛИЗОВАННЫЙ ВЕКТОР (diff) ----
             Vector3 diff = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
-            float lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
-            if (lenSq <= 0.0001f) continue;
-
-            float inv = 1.0f / std::sqrt(lenSq);
-            Vector3 dir = { diff.x*inv, diff.y*inv, diff.z*inv };
-
-            WriteAddr<Vector3>(hitObj + kHit_RayDir, dir);
+            WriteAddr<Vector3>(hitObj + kHit_RayDir, diff);
+            // Зануляем разброс
             WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
         }
     }
@@ -92,10 +91,11 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
-// ======== Основная функция ========
+// ======== Основная функция, вызывается из esp.mm каждый кадр ========
 void RunSilentAim() {
     InitSilentAimThread();
 
+    // Если сайлент выключен или нет матча – останавливаем запись
     if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
         g_hasData.store(false, std::memory_order_release);
         return;
@@ -108,6 +108,7 @@ void RunSilentAim() {
         return;
     }
 
+    // Сброс при смене матча
     if (local != g_lastLocal) {
         g_lastLocal = local;
         g_hasData.store(false, std::memory_order_release);
@@ -118,7 +119,7 @@ void RunSilentAim() {
         return;
     }
 
-    // ---- УБИРАЕМ ПРОВЕРКУ НА ГРАНАТЫ ----
+    // ---- УБИРАЕМ ПРОВЕРКУ НА ГРАНАТЫ / ОРУЖИЕ ----
     // Теперь пишем всегда, даже для гранат
 
     Vector3 tPos = HeadPos(target);
@@ -131,7 +132,7 @@ void RunSilentAim() {
         std::lock_guard<std::mutex> lk(g_lock);
         g_localPlayer = local;
         g_tPos        = tPos;
-        g_lPos        = HeadPos(local);
+        g_lPos        = HeadPos(local); // fallback
     }
     g_hasData.store(true, std::memory_order_release);
 }
