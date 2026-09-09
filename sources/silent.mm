@@ -1,150 +1,127 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
-#import "../esp/drawing_view/ESPPrefs.h"
 #import "mahoa.h"
+#include <cmath>
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
-#include <chrono>
-#include <cmath>
 
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// ─── Shared state ──────────────────────────────────────────────────
-static std::mutex  silentLock;
-static uint64_t    g_HitObjInfo = 0;
-static Vector3     g_TargetPos  = {0.0f, 0.0f, 0.0f};
-static bool        g_HasData    = false;
-static uint64_t    g_lastLocal  = 0;
+// iOS ARM64 OB54 оффсеты
+static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8; // m_LastAimingInfoFromWeapon
+static constexpr uint64_t kHit_RayDir         = 0x40;  // Vector3 RayDir
+static constexpr uint64_t kHit_StartPos       = 0x4C;  // Vector3 StartPosition
+static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 
-// ─── Helper: получить позицию головы ─────────────────────────────
-static Vector3 GetHeadPosition(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return {0.0f, 0.0f, 0.0f};
-    uint64_t headTrans = getHead(pawn);
-    if (!isVaildPtr(headTrans)) return {0.0f, 0.0f, 0.0f};
-    return getPositionExt(headTrans);
+static std::mutex        g_lock;
+static std::atomic<bool> g_hasData{false};
+static std::atomic<bool> g_started{false};
+static uint64_t          g_aimPtr  = 0;
+static Vector3           g_tPos    = {};
+static Vector3           g_lPos    = {};
+
+static Vector3 HeadPos(uint64_t pawn) {
+    if (!isVaildPtr(pawn)) return {};
+    uint64_t t = getHead(pawn);
+    return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// ─── Background thread: постоянная запись (без IsFiring) ──────────
-static void AimSilentThread() {
+static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::nanoseconds(1)); // 1 нс
-        if (!g_HasData) continue;
-
-        silentLock.lock();
-        uint64_t hitObj = g_HitObjInfo;
-        Vector3  targetPos = g_TargetPos;
-        bool     valid = g_HasData;
-        silentLock.unlock();
-
-        if (!valid || !isVaildPtr(hitObj)) continue;
-
-        // Читаем ammoBase (StartPosition)
-        Vector3 ammoBase = ReadAddr<Vector3>(hitObj + 0x4C);
-        // Если нулевая – выходим (структура не готова)
-        if (ammoBase.x == 0.0f && ammoBase.y == 0.0f && ammoBase.z == 0.0f)
+        // Убираем задержки в наносекундах и используем yield для мгновенного отклика потока
+        if (!g_hasData.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
             continue;
+        }
 
-        // Вычисляем direction (ненормализованный)
-        Vector3 dir;
-        dir.x = targetPos.x - ammoBase.x;
-        dir.y = targetPos.y - ammoBase.y;
-        dir.z = targetPos.z - ammoBase.z;
+        uint64_t h;
+        Vector3  tPos, lPos;
+        {
+            std::lock_guard<std::mutex> lk(g_lock);
+            h    = g_aimPtr;
+            tPos = g_tPos;
+            lPos = g_lPos;
+        }
+        if (!isVaildPtr(h)) {
+            g_hasData.store(false, std::memory_order_release);
+            continue;
+        }
 
-        // Записываем через WriteAddr
-        WriteAddr<Vector3>(hitObj + 0x40, dir);   // RayDir
-        WriteAddr<Vector3>(hitObj + 0x28, targetPos); // target position
-        WriteAddr<float>  (hitObj + 0x5C, 0.0f);   // scatter = 0 (убираем разброс)
+        // Читаем реальный StartPos из объекта
+        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+            origin = lPos;
+
+        Vector3 diff  = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
+        float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+        if (lenSq <= 0.0001f) continue;
+
+        float   inv = 1.0f / std::sqrt(lenSq);
+        Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
+
+        // Пишем вектор направления луча без пауз
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
 
-// ─── Вызывается каждый кадр из esp.mm ─────────────────────────────
-void RunSilentAim() {
-    if (!aimsilent1) {
-        if (g_HasData) {
-            silentLock.lock();
-            g_HasData = false;
-            g_HitObjInfo = 0;
-            silentLock.unlock();
-        }
-        return;
-    }
-
-    if (!isVaildPtr(cachedMatch)) return;
-
-    uint64_t localPlayer = getLocalPlayer(cachedMatch);
-    if (!isVaildPtr(localPlayer)) return;
-
-    // ─── Убрана проверка get_IsFiring ─────────────────────────────
-    // Теперь сайлент работает постоянно, без привязки к выстрелу.
-
-    // Сброс при смене матча
-    if (localPlayer != g_lastLocal) {
-        g_lastLocal = localPlayer;
-        silentLock.lock();
-        g_HasData = false;
-        g_HitObjInfo = 0;
-        silentLock.unlock();
-        return;
-    }
-
-    uint64_t closestEnemy = g_SilentBestTarget;
-    if (!isVaildPtr(closestEnemy)) {
-        if (g_HasData) {
-            silentLock.lock();
-            g_HasData = false;
-            g_HitObjInfo = 0;
-            silentLock.unlock();
-        }
-        return;
-    }
-
-    // Читаем HitObjectInfo из localPlayer + 0xDC8 (как в оригинале)
-    uint64_t hitObjInfo = ReadAddr<uint64_t>(localPlayer + 0xDC8);
-    if (!isVaildPtr(hitObjInfo)) {
-        if (g_HasData) {
-            silentLock.lock();
-            g_HasData = false;
-            g_HitObjInfo = 0;
-            silentLock.unlock();
-        }
-        return;
-    }
-
-    Vector3 enemyHeadPos = GetHeadPosition(closestEnemy);
-    if (enemyHeadPos.x == 0.0f && enemyHeadPos.y == 0.0f && enemyHeadPos.z == 0.0f) {
-        if (g_HasData) {
-            silentLock.lock();
-            g_HasData = false;
-            g_HitObjInfo = 0;
-            silentLock.unlock();
-        }
-        return;
-    }
-
-    silentLock.lock();
-    g_HitObjInfo = hitObjInfo;
-    g_TargetPos  = enemyHeadPos;
-    g_HasData    = true;
-    silentLock.unlock();
-}
-
-// ─── Инициализация потока (вызывается один раз) ──────────────────
 void InitSilentAimThread() {
-    static bool started = false;
-    if (!started) {
-        started = true;
-        std::thread(AimSilentThread).detach();
-    }
+    bool exp = false;
+    if (g_started.compare_exchange_strong(exp, true))
+        std::thread(SilentWorker).detach();
 }
 
-// ─── Сброс состояния (для esp.mm) ────────────────────────────────
+void RunSilentAim() {
+    InitSilentAimThread();
+
+    if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    uint64_t local  = getLocalPlayer(cachedMatch);
+    uint64_t target = g_SilentBestTarget;
+    if (!isVaildPtr(local) || !isVaildPtr(target)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    // Проверка на оружие/гранаты/айсволлы
+    uint64_t wpn = WeaponOnHand(local);
+    if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
+    if (!isVaildPtr(aimPtr)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    Vector3 tPos = HeadPos(target);
+    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    // Смещение в центр головы
+    tPos.y += 0.05f;
+
+    {
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_aimPtr = aimPtr;
+        g_tPos   = tPos;
+        g_lPos   = HeadPos(local);
+    }
+    g_hasData.store(true, std::memory_order_release);
+}
+
 void ResetSilentAim() {
-    silentLock.lock();
-    g_HasData = false;
-    g_HitObjInfo = 0;
-    g_TargetPos = {0.0f, 0.0f, 0.0f};
-    silentLock.unlock();
-    g_lastLocal = 0;
+    g_hasData.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> lk(g_lock);
+    g_aimPtr = 0;
 }
