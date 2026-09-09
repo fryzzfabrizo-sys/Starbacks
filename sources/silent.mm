@@ -7,8 +7,6 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// ─── Оригинальная проверка из проекта (isVaildPtr уже объявлена) ──
-
 // ─── Вспомогательная функция для получения позиции головы ─────────
 static Vector3 GetHeadPositionSafe(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {0.0f, 0.0f, 0.0f};
@@ -26,14 +24,13 @@ void RunSilentAim() {
         uint64_t localPlayer = getLocalPlayer(cachedMatch);
         if (!isVaildPtr(localPlayer)) return;
 
-        // Проверка стрельбы
         if (!get_IsFiring(localPlayer)) return;
 
         uint64_t closestEnemy = g_SilentBestTarget;
         if (!isVaildPtr(closestEnemy)) return;
 
-        // Читаем HitObjectInfo
-        void *hitObjInfo = *(void **)((uint64_t)localPlayer + 0xDC8);
+        // Читаем HitObjectInfo как uint64_t
+        uint64_t hitObjInfo = *(uint64_t *)((uint64_t)localPlayer + 0xDC8);
         if (!isVaildPtr(hitObjInfo)) return;
 
         // Позиция головы врага
@@ -41,7 +38,7 @@ void RunSilentAim() {
         if (targetPos.x == 0.0f && targetPos.y == 0.0f && targetPos.z == 0.0f) return;
 
         // Читаем ammoBase
-        Vector3 ammoBase = *(Vector3 *)((uint64_t)hitObjInfo + 0x4C);
+        Vector3 ammoBase = *(Vector3 *)(hitObjInfo + 0x4C);
         if (ammoBase.x == 0.0f && ammoBase.y == 0.0f && ammoBase.z == 0.0f) return;
 
         // Вычисляем направление (ненормализованное)
@@ -51,17 +48,17 @@ void RunSilentAim() {
         dir.z = targetPos.z - ammoBase.z;
 
         // Записываем
-        *(Vector3 *)((uint64_t)hitObjInfo + 0x40) = dir;
-        *(Vector3 *)((uint64_t)hitObjInfo + 0x28) = targetPos;
+        *(Vector3 *)(hitObjInfo + 0x40) = dir;
+        *(Vector3 *)(hitObjInfo + 0x28) = targetPos;
     } @catch (NSException *e) {
-        // Игнорируем любые исключения – чит не крашится
+        // Игнорируем любые исключения – чит не падает
     }
 }
 
 void InitSilentAimThread() {
-    // Ничего не делаем – поток не нужен
+    // Ничего не делаем – синхронная запись
 }
 
 void ResetSilentAim() {
-    // Ничего не делаем – всё синхронно
+    // Ничего не делаем
 }
