@@ -88,40 +88,35 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
+void ResetSilentAim() {
+    g_hasData.store(false, std::memory_order_release);
+    g_lastLocal      = 0;
+    g_lastTarget     = 0;
+    g_lastMatch      = 0;
+    g_prevTargetPos  = {};
+    g_targetVelocity = {};
+    std::lock_guard<std::mutex> lk(g_lock);
+    g_aimPtr = 0;
+}
+
 void RunSilentAim() {
     InitSilentAimThread();
 
-    // Принудительный сброс, если выключено, мы в лобби или матч сбросился
-    if (!aimsilent1 || !isVaildPtr(cachedMatch) || IsAtLobby(Moudule_Base)) {
-        g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
-        g_lastLocal      = 0;
-        g_lastTarget     = 0;
-        g_lastMatch      = 0;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            g_aimPtr = 0;
-        }
+    // 1. Полный сброс, если функция выключена, мы в лобби или адрес матча невалиден
+    if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
+        ResetSilentAim();
+        return;
+    }
+
+    // 2. Автоматический сброс при смене матча (даже без выхода в лобби)
+    if (cachedMatch != g_lastMatch) {
+        g_lastMatch = cachedMatch;
+        ResetSilentAim();
         return;
     }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
-
-    if (cachedMatch != g_lastMatch || local != g_lastLocal || target != g_lastTarget) {
-        g_lastMatch      = cachedMatch;
-        g_lastLocal      = local;
-        g_lastTarget     = target;
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
-        g_hasData.store(false, std::memory_order_release);
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            g_aimPtr = 0;
-        }
-        return;
-    }
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
@@ -180,15 +175,4 @@ void RunSilentAim() {
         g_lPos   = HeadPos(local);
     }
     g_hasData.store(true, std::memory_order_release);
-}
-
-void ResetSilentAim() {
-    g_hasData.store(false, std::memory_order_release);
-    g_lastLocal      = 0;
-    g_lastTarget     = 0;
-    g_lastMatch      = 0;
-    g_prevTargetPos  = {};
-    g_targetVelocity = {};
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
 }
