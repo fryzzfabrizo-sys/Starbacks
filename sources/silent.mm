@@ -6,33 +6,38 @@
 #include <thread>
 #include <chrono>
 
-// ─── Extern: bestTarget được promote lên file scope trong esp.mm ───
-// GetClosestEnemysilent1() đọc thẳng từ đó — không cần pass thêm.
+// ─── Extern: bestTarget ────────────────────────────────────────────
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// ─── Shared state giữa main thread và background thread ───────────
+// ─── Shared state ──────────────────────────────────────────────────
 static std::mutex  silentLock;
 static void       *g_HitObjInfo = nullptr;
 static Vector3     g_TargetPos  = {0.0f, 0.0f, 0.0f};
 static bool        g_HasData    = false;
 
-// ─── Helper: lấy enemy gần nhất từ g_SilentBestTarget ─────────────
+// ─── Вспомогательная проверка валидности (аналог isVaildPtr) ─────
+static inline bool isValidPtr(void *p) {
+    uint64_t addr = (uint64_t)p;
+    return addr >= 0x100000000ULL && addr <= 0x0000FFFFFFFFFFFFULL;
+}
+
+// ─── Helper: lấy enemy gần nhất ──────────────────────────────────
 static uint64_t GetClosestEnemysilent1() {
-    if (!isVaildPtr(g_SilentBestTarget)) return 0;
+    if (!isValidPtr((void*)g_SilentBestTarget)) return 0;
     return g_SilentBestTarget;
 }
 
 // ─── Helper: lấy vị trí đầu địch ─────────────────────────────────
 static Vector3 GetHeadPosition(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return {0.0f, 0.0f, 0.0f};
+    if (!isValidPtr((void*)pawn)) return {0.0f, 0.0f, 0.0f};
     uint64_t headTrans = getHead(pawn);
-    if (!isVaildPtr(headTrans)) return {0.0f, 0.0f, 0.0f};
+    if (!isValidPtr((void*)headTrans)) return {0.0f, 0.0f, 0.0f};
     return getPositionExt(headTrans);
 }
 
-// ─── Background thread: redirect trajectory của viên đạn ──────────
+// ─── Background thread ─────────────────────────────────────────────
 static void AimSilentThread() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::microseconds(1));
@@ -46,24 +51,31 @@ static void AimSilentThread() {
 
         if (!valid || !currentHitObj) continue;
 
-        // Đọc vị trí gốc viên đạn
-        Vector3 ammoBase = *(Vector3 *)((uint64_t)currentHitObj + 0x4C);
+        // --- Добавленная проверка валидности ---
+        if (!isValidPtr(currentHitObj)) {
+            silentLock.lock();
+            g_HasData = false;
+            g_HitObjInfo = nullptr;
+            silentLock.unlock();
+            continue;
+        }
 
-        // Tính direction vector: target − origin
+        Vector3 ammoBase = *(Vector3 *)((uint64_t)currentHitObj + 0x4C);
+        // --- Если ammoBase нулевая – структура ещё не готова ---
+        if (ammoBase.x == 0.0f && ammoBase.y == 0.0f && ammoBase.z == 0.0f) continue;
+
         Vector3 dir;
         dir.x = targetPos.x - ammoBase.x;
         dir.y = targetPos.y - ammoBase.y;
         dir.z = targetPos.z - ammoBase.z;
 
-        // Ghi đè direction và target vào HitObjectInfo
         *(Vector3 *)((uint64_t)currentHitObj + 0x40) = dir;
         *(Vector3 *)((uint64_t)currentHitObj + 0x28) = targetPos;
     }
 }
 
-// ─── Gọi mỗi frame từ renderESPWithBuffers ────────────────────────
+// ─── Gọi mỗi frame ────────────────────────────────────────────────
 void RunSilentAim() {
-    // Feature tắt → flush data
     if (!aimsilent1) {
         if (g_HasData) {
             silentLock.lock();
@@ -74,12 +86,11 @@ void RunSilentAim() {
         return;
     }
 
-    if (!isVaildPtr(cachedMatch)) return;
+    if (!isValidPtr((void*)cachedMatch)) return;
 
     uint64_t localPlayer = getLocalPlayer(cachedMatch);
-    if (!isVaildPtr(localPlayer)) return;
+    if (!isValidPtr((void*)localPlayer)) return;
 
-    // Chỉ chạy khi đang bắn
     if (!get_IsFiring(localPlayer)) {
         if (g_HasData) {
             silentLock.lock();
@@ -101,11 +112,19 @@ void RunSilentAim() {
         return;
     }
 
-    // Đọc HitObjectInfo từ local player + 0xDC8
     void *hitObjInfo = *(void **)((uint64_t)localPlayer + 0xDC8);
-    if (!hitObjInfo) return;
+    if (!isValidPtr(hitObjInfo)) return;
 
     Vector3 enemyHeadPos = GetHeadPosition(closestEnemy);
+    if (enemyHeadPos.x == 0.0f && enemyHeadPos.y == 0.0f && enemyHeadPos.z == 0.0f) {
+        if (g_HasData) {
+            silentLock.lock();
+            g_HasData    = false;
+            g_HitObjInfo = nullptr;
+            silentLock.unlock();
+        }
+        return;
+    }
 
     silentLock.lock();
     g_HitObjInfo = hitObjInfo;
@@ -114,12 +133,16 @@ void RunSilentAim() {
     silentLock.unlock();
 }
 
-// ─── Gọi 1 lần khi HUD khởi động ─────────────────────────────────
+// ─── Инициализация потока ─────────────────────────────────────────
 void InitSilentAimThread() {
-    std::thread(AimSilentThread).detach();
+    static bool started = false;
+    if (!started) {
+        started = true;
+        std::thread(AimSilentThread).detach();
+    }
 }
 
-// ─── Сброс состояния (добавлено для линковки с esp.mm) ──────────
+// ─── Сброс состояния (для esp.mm) ────────────────────────────────
 void ResetSilentAim() {
     silentLock.lock();
     g_HasData    = false;
