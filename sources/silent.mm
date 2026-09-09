@@ -11,21 +11,22 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// iOS ARM64 OB54 оффсеты
-static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8; // m_LastAimingInfoFromWeapon
-static constexpr uint64_t kHit_RayDir         = 0x40;  // Vector3 RayDir
-static constexpr uint64_t kHit_StartPos       = 0x4C;  // Vector3 StartPosition
+static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
+static constexpr uint64_t kHit_RayDir         = 0x40;
+static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr  = 0;
-static Vector3           g_tPos    = {};
-static Vector3           g_lPos    = {};
-// Переменные для отслеживания движения цели
+static uint64_t          g_aimPtr        = 0;
+static Vector3           g_tPos          = {};
+static Vector3           g_lPos          = {};
 static Vector3           g_prevTargetPos = {};
 static Vector3           g_targetVelocity = {};
+
+// Фикс второго матча
+static uint64_t          g_lastLocal     = 0;
 
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
@@ -35,7 +36,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 
 static void SilentWorker() {
     while (true) {
-        // Убираем задержки в наносекундах и используем yield для мгновенного отклика потока
+        // yield вместо sleep_for — OS scheduler, мгновенный отклик без busy-wait
         if (!g_hasData.load(std::memory_order_acquire)) {
             std::this_thread::yield();
             continue;
@@ -45,24 +46,23 @@ static void SilentWorker() {
         Vector3  tPos, lPos, vel;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h   = g_aimPtr;
+            h    = g_aimPtr;
             tPos = g_tPos;
             lPos = g_lPos;
-            vel = g_targetVelocity;
+            vel  = g_targetVelocity;
         }
         if (!isVaildPtr(h)) {
             g_hasData.store(false, std::memory_order_release);
             continue;
         }
 
-        // Предикшен: компенсируем движение врага (коэффициент 0.06f можно чуть уменьшить/увеличить по вкусу)
+        // Предсказание движения цели (0.06f — коэффициент компенсации)
         Vector3 predPos = {
             tPos.x + vel.x * 0.06f,
             tPos.y + vel.y * 0.06f,
             tPos.z + vel.z * 0.06f
         };
 
-        // Читаем реальный StartPos из объекта
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
             origin = lPos;
@@ -74,7 +74,6 @@ static void SilentWorker() {
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
-        // Пишем вектор направления луча без пауз
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
@@ -90,7 +89,8 @@ void RunSilentAim() {
 
     if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos = {};
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
@@ -98,33 +98,49 @@ void RunSilentAim() {
     uint64_t target = g_SilentBestTarget;
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos = {};
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
-    // Проверка на оружие/гранаты/айсволлы
+    // Фикс второго матча: localPlayer сменился = новый матч
+    if (local != g_lastLocal) {
+        g_lastLocal = local;
+        g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
+        {
+            std::lock_guard<std::mutex> lk(g_lock);
+            g_aimPtr = 0;
+        }
+        return; // следующий кадр подхватит свежий aimPtr
+    }
+
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos = {};
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!isVaildPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos = {};
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
     Vector3 tPos = HeadPos(target);
     if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos = {};
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
-    // Считаем примерную скорость цели между кадрами вызова
+    // Вычисляем скорость цели между кадрами
     if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
         g_targetVelocity = {
             tPos.x - g_prevTargetPos.x,
@@ -132,11 +148,11 @@ void RunSilentAim() {
             tPos.z - g_prevTargetPos.z
         };
     } else {
-        g_targetVelocity = {0, 0, 0};
+        g_targetVelocity = {0.0f, 0.0f, 0.0f};
     }
     g_prevTargetPos = tPos;
 
-    // Смещение в центр головы
+    // +0.05f — смещение в центр головы
     tPos.y += 0.05f;
 
     {
@@ -150,8 +166,9 @@ void RunSilentAim() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
+    g_lastLocal      = 0;
+    g_prevTargetPos  = {};
+    g_targetVelocity = {};
     std::lock_guard<std::mutex> lk(g_lock);
     g_aimPtr = 0;
-    g_prevTargetPos = {};
-    g_targetVelocity = {};
 }
