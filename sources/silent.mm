@@ -10,19 +10,26 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-static std::mutex  silentLock;
-static uint64_t    g_HitObjInfo = 0;
-static Vector3     g_TargetPos  = {0.0f, 0.0f, 0.0f};
-static bool        g_HasData    = false;
+// Все GMPGMPFNMFP слоты на Player (OB54) — включая гранаты и скиллы
+static constexpr uint64_t kSlots[] = {
+    0xA90, 0xAA0,               // m_hitObjInfo / m_touchObjectInfo
+    0xDC8, 0xDD0,               // m_LastAimingInfoFromWeapon (regular / MaxGame)
+    0x15F0, 0x1760,             // skill / special slots
+    0x1A88,                     // grenade slot
+    0x2130, 0x21D8              // extra slots
+};
+static constexpr int kSlotCount = sizeof(kSlots)/sizeof(kSlots[0]);
 
-// Детект смены матча
-static uint64_t    g_lastLocal  = 0;
+static std::mutex  silentLock;
+static uint64_t    g_local     = 0;
+static Vector3     g_TargetPos = {0,0,0};
+static bool        g_HasData   = false;
+static uint64_t    g_lastLocal = 0;
 
 static Vector3 GetHeadPosition(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return {0.0f, 0.0f, 0.0f};
-    uint64_t headTrans = getHead(pawn);
-    if (!isVaildPtr(headTrans)) return {0.0f, 0.0f, 0.0f};
-    return getPositionExt(headTrans);
+    if (!isVaildPtr(pawn)) return {};
+    uint64_t h = getHead(pawn);
+    return isVaildPtr(h) ? getPositionExt(h) : Vector3{};
 }
 
 static void AimSilentThread() {
@@ -31,95 +38,76 @@ static void AimSilentThread() {
         if (!g_HasData) continue;
 
         silentLock.lock();
-        uint64_t h       = g_HitObjInfo;
-        Vector3  tPos    = g_TargetPos;
-        bool     valid   = g_HasData;
+        uint64_t local = g_local;
+        Vector3  tPos  = g_TargetPos;
+        bool     valid = g_HasData;
         silentLock.unlock();
 
-        if (!valid || !isVaildPtr(h)) continue;
+        if (!valid || !isVaildPtr(local)) continue;
 
-        // offset +0x4C: StartPosition (откуда летит пуля)
-        Vector3 ammoBase = ReadAddr<Vector3>(h + 0x4C);
+        // Пишем во все слоты без исключения
+        for (int i = 0; i < kSlotCount; i++) {
+            uint64_t h = ReadAddr<uint64_t>(local + kSlots[i]);
+            if (!isVaildPtr(h)) continue;
 
-        Vector3 dir;
-        dir.x = tPos.x - ammoBase.x;
-        dir.y = tPos.y - ammoBase.y;
-        dir.z = tPos.z - ammoBase.z;
+            Vector3 base = ReadAddr<Vector3>(h + 0x4C); // StartPosition
+            if (base.x == 0 && base.y == 0 && base.z == 0)
+                base = ReadAddr<Vector3>(local + 0x100); // fallback: local pos
 
-        float len = dir.x*dir.x + dir.y*dir.y + dir.z*dir.z;
-        if (len <= 0.0001f) continue;
-        float inv = 1.0f / __builtin_sqrtf(len);
-        dir.x *= inv; dir.y *= inv; dir.z *= inv;
+            Vector3 dir = { tPos.x-base.x, tPos.y-base.y, tPos.z-base.z };
+            float len = dir.x*dir.x + dir.y*dir.y + dir.z*dir.z;
+            if (len < 0.0001f) continue;
+            float inv = 1.f/__builtin_sqrtf(len);
+            dir.x *= inv; dir.y *= inv; dir.z *= inv;
 
-        // +0x40: RayDir — куда летит пуля
-        WriteAddr<Vector3>(h + 0x40, dir);
-        // +0x28: HitLocation — позиция попадания (как в оригинале)
-        WriteAddr<Vector3>(h + 0x28, tPos);
-        // +0x5C: scatter float — зануляем, иначе игра добавит разброс поверх нашего RayDir
-        // (из Hooks.h: float PGCPFOAJHBM — без этого часть пуль уходит мимо)
-        WriteAddr<float>(h + 0x5C, 0.0f);
+            WriteAddr<Vector3>(h + 0x40, dir);  // RayDir
+            WriteAddr<Vector3>(h + 0x28, tPos); // HitLocation
+            WriteAddr<float>  (h + 0x5C, 0.f);  // scatter = 0
+        }
     }
 }
 
 void InitSilentAimThread() {
     static bool started = false;
-    if (!started) {
-        started = true;
-        std::thread(AimSilentThread).detach();
-    }
+    if (!started) { started = true; std::thread(AimSilentThread).detach(); }
 }
 
 void RunSilentAim() {
     if (!aimsilent1) {
-        silentLock.lock();
-        g_HasData    = false;
-        g_HitObjInfo = 0;
-        silentLock.unlock();
+        silentLock.lock(); g_HasData = false; g_local = 0; silentLock.unlock();
         return;
     }
-
     if (!isVaildPtr(cachedMatch)) return;
 
-    uint64_t localPlayer = getLocalPlayer(cachedMatch);
-    if (!isVaildPtr(localPlayer)) return;
+    uint64_t local = getLocalPlayer(cachedMatch);
+    if (!isVaildPtr(local)) return;
 
-    // Фикс второго матча: при смене localPlayer сбрасываем
-    if (localPlayer != g_lastLocal) {
-        g_lastLocal = localPlayer;
-        silentLock.lock();
-        g_HasData    = false;
-        g_HitObjInfo = 0;
-        silentLock.unlock();
-        return; // следующий кадр возьмёт свежий aimPtr
-    }
-
-    uint64_t closestEnemy = isVaildPtr(g_SilentBestTarget) ? g_SilentBestTarget : 0;
-    if (!closestEnemy) {
-        silentLock.lock();
-        g_HasData    = false;
-        g_HitObjInfo = 0;
-        silentLock.unlock();
+    if (local != g_lastLocal) {
+        g_lastLocal = local;
+        silentLock.lock(); g_HasData = false; g_local = 0; silentLock.unlock();
         return;
     }
 
-    // Читаем HitObjectInfo через ReadAddr (не прямое разыменование — краш в external)
-    uint64_t hitObjInfo = ReadAddr<uint64_t>(localPlayer + 0xDC8);
-    if (!isVaildPtr(hitObjInfo)) return;
+    uint64_t enemy = isVaildPtr(g_SilentBestTarget) ? g_SilentBestTarget : 0;
+    if (!enemy) {
+        silentLock.lock(); g_HasData = false; silentLock.unlock();
+        return;
+    }
 
-    Vector3 enemyHeadPos = GetHeadPosition(closestEnemy);
-    if (enemyHeadPos.x == 0.0f && enemyHeadPos.y == 0.0f && enemyHeadPos.z == 0.0f) return;
+    Vector3 tPos = GetHeadPosition(enemy);
+    if (tPos.x == 0 && tPos.y == 0 && tPos.z == 0) {
+        silentLock.lock(); g_HasData = false; silentLock.unlock();
+        return;
+    }
 
     silentLock.lock();
-    g_HitObjInfo = hitObjInfo;
-    g_TargetPos  = enemyHeadPos;
-    g_HasData    = true;
+    g_local    = local;
+    g_TargetPos = tPos;
+    g_HasData  = true;
     silentLock.unlock();
 }
 
 void ResetSilentAim() {
-    silentLock.lock();
-    g_HasData    = false;
-    g_HitObjInfo = 0;
-    silentLock.unlock();
+    silentLock.lock(); g_HasData = false; g_local = 0; silentLock.unlock();
     g_lastLocal = 0;
 }
