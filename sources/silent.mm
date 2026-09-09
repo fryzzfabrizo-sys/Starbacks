@@ -28,6 +28,11 @@ static Vector3           g_targetVelocity = {};
 // Фикс второго матча
 static uint64_t          g_lastLocal     = 0;
 
+// Надежная проверка указателей для реальных матчей (как в старом рабочем коде)
+static inline bool validPtr(uint64_t p) {
+    return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
+}
+
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
@@ -36,7 +41,6 @@ static Vector3 HeadPos(uint64_t pawn) {
 
 static void SilentWorker() {
     while (true) {
-        // yield вместо sleep_for — OS scheduler, мгновенный отклик без busy-wait
         if (!g_hasData.load(std::memory_order_acquire)) {
             std::this_thread::yield();
             continue;
@@ -51,7 +55,8 @@ static void SilentWorker() {
             lPos = g_lPos;
             vel  = g_targetVelocity;
         }
-        if (!isVaildPtr(h)) {
+        // Используем проверенную validPtr вместо общей isVaildPtr
+        if (!validPtr(h)) {
             g_hasData.store(false, std::memory_order_release);
             continue;
         }
@@ -113,7 +118,7 @@ void RunSilentAim() {
             std::lock_guard<std::mutex> lk(g_lock);
             g_aimPtr = 0;
         }
-        return; // следующий кадр подхватит свежий aimPtr
+        return;
     }
 
     uint64_t wpn = WeaponOnHand(local);
@@ -125,7 +130,8 @@ void RunSilentAim() {
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-    if (!isVaildPtr(aimPtr)) {
+    // Проверяем через validPtr, чтобы в реальных матчах указатель не отсекался ложно
+    if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
         g_prevTargetPos  = {};
         g_targetVelocity = {};
@@ -140,7 +146,7 @@ void RunSilentAim() {
         return;
     }
 
-    // Вычисляем скорость цели между кадрами
+    // Вычисляем скорость цели между кадрами для движения
     if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
         g_targetVelocity = {
             tPos.x - g_prevTargetPos.x,
@@ -152,7 +158,7 @@ void RunSilentAim() {
     }
     g_prevTargetPos = tPos;
 
-    // +0.05f — смещение в центр головы
+    // Смещение в центр головы
     tPos.y += 0.05f;
 
     {
