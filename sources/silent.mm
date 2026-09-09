@@ -25,7 +25,6 @@ static Vector3           g_lPos           = {};
 static Vector3           g_prevTargetPos  = {};
 static Vector3           g_targetVelocity = {};
 
-// Переменные для сброса между матчами и целями
 static uint64_t          g_lastLocal      = 0;
 static uint64_t          g_lastTarget     = 0;
 static uint64_t          g_lastMatch      = 0;
@@ -61,7 +60,6 @@ static void SilentWorker() {
             continue;
         }
 
-        // Предсказание движения цели (0.06f — коэффициент упреждения)
         Vector3 predPos = {
             tPos.x + vel.x * 0.06f,
             tPos.y + vel.y * 0.06f,
@@ -79,7 +77,6 @@ static void SilentWorker() {
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
-        // Пишем безопасный RayDir, который принимается сервером в реальных матчах
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
@@ -101,8 +98,11 @@ void RunSilentAim() {
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
 
-    // Сброс при смене матча, игрока или цели (гарантирует работу во 2-й и последующих катках)
-    if (cachedMatch != g_lastMatch || local != g_lastLocal || target != g_lastTarget) {
+    // Дополнительно проверяем голову локального игрока: если она пустая, значит объект еще не прогрузился или сменился матч
+    Vector3 localHead = HeadPos(local);
+    bool localHeadInvalid = (localHead.x == 0.0f && localHead.y == 0.0f && localHead.z == 0.0f);
+
+    if (cachedMatch != g_lastMatch || local != g_lastLocal || target != g_lastTarget || localHeadInvalid) {
         g_lastMatch      = cachedMatch;
         g_lastLocal      = local;
         g_lastTarget     = target;
@@ -147,7 +147,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Безопасный расчет скорости цели без скачков при телепортации/респавне
     if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
         Vector3 delta = {
             tPos.x - g_prevTargetPos.x,
@@ -165,14 +164,13 @@ void RunSilentAim() {
     }
     g_prevTargetPos = tPos;
 
-    // Смещение в центр головы
     tPos.y += 0.05f;
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = aimPtr;
         g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
+        g_lPos   = localHead; // Используем уже прочитанную позицию головы локального игрока
     }
     g_hasData.store(true, std::memory_order_release);
 }
