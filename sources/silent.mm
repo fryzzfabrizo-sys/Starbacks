@@ -19,16 +19,16 @@ static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr        = 0;
-static Vector3           g_tPos          = {};
-static Vector3           g_lPos          = {};
-static Vector3           g_prevTargetPos = {};
+static uint64_t          g_aimPtr         = 0;
+static Vector3           g_tPos           = {};
+static Vector3           g_lPos           = {};
+static Vector3           g_prevTargetPos  = {};
 static Vector3           g_targetVelocity = {};
 
-// Переменные для отслеживания смены матча и цели
-static uint64_t          g_lastLocal     = 0;
-static uint64_t          g_lastTarget    = 0;
-static uint64_t          g_lastMatch     = 0;
+// Переменные для сброса между матчами и целями
+static uint64_t          g_lastLocal      = 0;
+static uint64_t          g_lastTarget     = 0;
+static uint64_t          g_lastMatch      = 0;
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
@@ -61,6 +61,7 @@ static void SilentWorker() {
             continue;
         }
 
+        // Предсказание движения цели (0.06f — коэффициент упреждения)
         Vector3 predPos = {
             tPos.x + vel.x * 0.06f,
             tPos.y + vel.y * 0.06f,
@@ -78,6 +79,7 @@ static void SilentWorker() {
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
+        // Пишем безопасный RayDir, который принимается сервером в реальных матчах
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
@@ -98,8 +100,8 @@ void RunSilentAim() {
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
-    
-    // Сброс, если поменялся матч, указатель матча, локальный игрок или сама цель
+
+    // Сброс при смене матча, игрока или цели (гарантирует работу во 2-й и последующих катках)
     if (cachedMatch != g_lastMatch || local != g_lastLocal || target != g_lastTarget) {
         g_lastMatch      = cachedMatch;
         g_lastLocal      = local;
@@ -145,7 +147,7 @@ void RunSilentAim() {
         return;
     }
 
-    // Безопасный расчет скорости (отсекаем резкие скачки/телепортации при смене целей)
+    // Безопасный расчет скорости цели без скачков при телепортации/респавне
     if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
         Vector3 delta = {
             tPos.x - g_prevTargetPos.x,
@@ -153,8 +155,7 @@ void RunSilentAim() {
             tPos.z - g_prevTargetPos.z
         };
         float distSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-        // Если дельта слишком большая (цель респавнилась или сменилась), не учитываем её как скорость
-        if (distSq < 25.0f) { 
+        if (distSq < 25.0f) {
             g_targetVelocity = delta;
         } else {
             g_targetVelocity = {0.0f, 0.0f, 0.0f};
