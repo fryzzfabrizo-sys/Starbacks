@@ -47,11 +47,8 @@ uint64_t CameraMain(uint64_t matchgame) {
 
 bool getIsVisible(uint64_t playerPawn) {
     if (!isVaildPtr(playerPawn)) return false;
-    // HP guard
     if (get_CurHP(playerPawn) <= 0) return false;
 
-    // UmaAvatar chain — безопасный visible check (BitArrayBoolean крашит)
-    // Строгая iOS ARM64 проверка: >= 4GB
     uint64_t avatarMgr = ReadAddr<uint64_t>(playerPawn + _0x27276BC);
     if (avatarMgr < 0x100000000ULL || avatarMgr > 0x0000FFFFFFFFFFFFULL) return true;
 
