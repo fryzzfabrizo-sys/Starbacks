@@ -7,6 +7,7 @@
 #include <mutex>
 #include <thread>
 
+extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
@@ -90,19 +91,25 @@ void InitSilentAimThread() {
 void RunSilentAim() {
     InitSilentAimThread();
 
-    if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
+    // Принудительный сброс, если выключено, мы в лобби или матч сбросился
+    if (!aimsilent1 || !isVaildPtr(cachedMatch) || IsAtLobby(Moudule_Base)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
+        g_lastLocal      = 0;
+        g_lastTarget     = 0;
+        g_lastMatch      = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_lock);
+            g_aimPtr = 0;
+        }
         return;
     }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
 
-    // Дополнительно проверяем голову локального игрока: если она пустая, значит объект еще не прогрузился или сменился матч
-    Vector3 localHead = HeadPos(local);
-    bool localHeadInvalid = (localHead.x == 0.0f && localHead.y == 0.0f && localHead.z == 0.0f);
-
-    if (cachedMatch != g_lastMatch || local != g_lastLocal || target != g_lastTarget || localHeadInvalid) {
+    if (cachedMatch != g_lastMatch || local != g_lastLocal || target != g_lastTarget) {
         g_lastMatch      = cachedMatch;
         g_lastLocal      = local;
         g_lastTarget     = target;
@@ -170,7 +177,7 @@ void RunSilentAim() {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = aimPtr;
         g_tPos   = tPos;
-        g_lPos   = localHead; // Используем уже прочитанную позицию головы локального игрока
+        g_lPos   = HeadPos(local);
     }
     g_hasData.store(true, std::memory_order_release);
 }
