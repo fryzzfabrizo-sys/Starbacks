@@ -25,10 +25,11 @@ static Vector3           g_lPos          = {};
 static Vector3           g_prevTargetPos = {};
 static Vector3           g_targetVelocity = {};
 
-// Фикс второго матча
+// Переменные для отслеживания смены матча и цели
 static uint64_t          g_lastLocal     = 0;
+static uint64_t          g_lastTarget    = 0;
+static uint64_t          g_lastMatch     = 0;
 
-// Надежная проверка указателей для реальных матчей (как в старом рабочем коде)
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
@@ -55,13 +56,11 @@ static void SilentWorker() {
             lPos = g_lPos;
             vel  = g_targetVelocity;
         }
-        // Используем проверенную validPtr вместо общей isVaildPtr
         if (!validPtr(h)) {
             g_hasData.store(false, std::memory_order_release);
             continue;
         }
 
-        // Предсказание движения цели (0.06f — коэффициент компенсации)
         Vector3 predPos = {
             tPos.x + vel.x * 0.06f,
             tPos.y + vel.y * 0.06f,
@@ -94,30 +93,31 @@ void RunSilentAim() {
 
     if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
-    if (!isVaildPtr(local) || !isVaildPtr(target)) {
-        g_hasData.store(false, std::memory_order_release);
+    
+    // Сброс, если поменялся матч, указатель матча, локальный игрок или сама цель
+    if (cachedMatch != g_lastMatch || local != g_lastLocal || target != g_lastTarget) {
+        g_lastMatch      = cachedMatch;
+        g_lastLocal      = local;
+        g_lastTarget     = target;
         g_prevTargetPos  = {};
         g_targetVelocity = {};
-        return;
-    }
-
-    // Фикс второго матча: localPlayer сменился = новый матч
-    if (local != g_lastLocal) {
-        g_lastLocal = local;
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         {
             std::lock_guard<std::mutex> lk(g_lock);
             g_aimPtr = 0;
         }
+        return;
+    }
+
+    if (!isVaildPtr(local) || !isVaildPtr(target)) {
+        g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
@@ -130,7 +130,6 @@ void RunSilentAim() {
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-    // Проверяем через validPtr, чтобы в реальных матчах указатель не отсекался ложно
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
         g_prevTargetPos  = {};
@@ -146,13 +145,20 @@ void RunSilentAim() {
         return;
     }
 
-    // Вычисляем скорость цели между кадрами для движения
+    // Безопасный расчет скорости (отсекаем резкие скачки/телепортации при смене целей)
     if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
-        g_targetVelocity = {
+        Vector3 delta = {
             tPos.x - g_prevTargetPos.x,
             tPos.y - g_prevTargetPos.y,
             tPos.z - g_prevTargetPos.z
         };
+        float distSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+        // Если дельта слишком большая (цель респавнилась или сменилась), не учитываем её как скорость
+        if (distSq < 25.0f) { 
+            g_targetVelocity = delta;
+        } else {
+            g_targetVelocity = {0.0f, 0.0f, 0.0f};
+        }
     } else {
         g_targetVelocity = {0.0f, 0.0f, 0.0f};
     }
@@ -173,6 +179,8 @@ void RunSilentAim() {
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     g_lastLocal      = 0;
+    g_lastTarget     = 0;
+    g_lastMatch      = 0;
     g_prevTargetPos  = {};
     g_targetVelocity = {};
     std::lock_guard<std::mutex> lk(g_lock);
