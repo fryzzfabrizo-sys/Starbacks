@@ -3,8 +3,9 @@
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
-#include <thread>
+#include <chrono>
 #include <mutex>
+#include <thread>
 
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
@@ -14,16 +15,19 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 
 static std::mutex        g_lock;
+static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static std::atomic<bool> g_active{false};
-static uint64_t          g_aimPtr     = 0;
-static Vector3           g_predPos    = {};
-static Vector3           g_lPos       = {};
-
+static uint64_t          g_aimPtr         = 0;
+static Vector3           g_tPos           = {};
+static Vector3           g_lPos           = {};
 static Vector3           g_prevTargetPos  = {};
 static Vector3           g_targetVelocity = {};
+
+static uint64_t          g_lastLocal      = 0;
+static uint64_t          g_lastTarget     = 0;
 static uint64_t          g_lastMatch      = 0;
 
 static inline bool validPtr(uint64_t p) {
@@ -38,54 +42,60 @@ static Vector3 HeadPos(uint64_t pawn) {
 
 static void SilentWorker() {
     while (true) {
-        if (!g_active.load(std::memory_order_acquire) || !aimsilent1 || IsAtLobby(Moudule_Base)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (!g_hasData.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
             continue;
         }
 
         uint64_t h;
-        Vector3 tPos, lPos;
+        Vector3  tPos, lPos, vel;
         {
             std::lock_guard<std::mutex> lk(g_lock);
             h    = g_aimPtr;
-            tPos = g_predPos;
+            tPos = g_tPos;
             lPos = g_lPos;
+            vel  = g_targetVelocity;
         }
-
         if (!validPtr(h)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            g_hasData.store(false, std::memory_order_release);
             continue;
         }
+
+        Vector3 predPos = {
+            tPos.x + vel.x * 0.06f,
+            tPos.y + vel.y * 0.06f,
+            tPos.z + vel.z * 0.06f
+        };
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
             origin = lPos;
 
-        Vector3 diff  = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
+        Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
         float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-        if (lenSq <= 0.0001f) {
-            std::this_thread::yield();
-            continue;
-        }
+        if (lenSq <= 0.0001f) continue;
 
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
-        
-        std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
 }
 
 void InitSilentAimThread() {
     bool exp = false;
-    if (g_started.compare_exchange_strong(exp, true)) {
+    if (g_started.compare_exchange_strong(exp, true))
         std::thread(SilentWorker).detach();
-    }
 }
 
 void ResetSilentAim() {
-    g_active.store(false, std::memory_order_release);
+    g_hasData.store(false, std::memory_order_release);
+    g_lastLocal      = 0;
+    g_lastTarget     = 0;
+    // ВАЖНО: g_lastMatch здесь НЕ обнуляем.
+    // Раньше это давало бесконечный цикл:
+    //   cachedMatch != 0 -> g_lastMatch = cachedMatch -> ResetSilentAim() -> g_lastMatch = 0 -> снова...
+    // из-за чего g_hasData никогда не становился true и сайлент молчал во всех матчах кроме первого.
     g_prevTargetPos  = {};
     g_targetVelocity = {};
     std::lock_guard<std::mutex> lk(g_lock);
@@ -95,33 +105,51 @@ void ResetSilentAim() {
 void RunSilentAim() {
     InitSilentAimThread();
 
+    // 1. Полный сброс, если функция выключена, мы в лобби или адрес матча невалиден
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
+        g_lastMatch = 0;   // явный сброс только здесь
         ResetSilentAim();
         return;
     }
 
+    // 2. Смена матча — сбрасываем состояние
     if (cachedMatch != g_lastMatch) {
-        g_lastMatch = cachedMatch;
         ResetSilentAim();
+        g_lastMatch = cachedMatch;   // ставим ПОСЛЕ сброса
+        return;
     }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
-        g_active.store(false, std::memory_order_release);
+        g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
+        return;
+    }
+
+    uint64_t wpn = WeaponOnHand(local);
+    if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
+        g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
-        g_active.store(false, std::memory_order_release);
+        g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
     Vector3 tPos = HeadPos(target);
     if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
-        g_active.store(false, std::memory_order_release);
+        g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
@@ -144,18 +172,11 @@ void RunSilentAim() {
 
     tPos.y += 0.05f;
 
-    Vector3 predPos = {
-        tPos.x + g_targetVelocity.x * 0.06f,
-        tPos.y + g_targetVelocity.y * 0.06f,
-        tPos.z + g_targetVelocity.z * 0.06f
-    };
-
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr  = aimPtr;
-        g_predPos = predPos;
-        g_lPos    = HeadPos(local);
+        g_aimPtr = aimPtr;
+        g_tPos   = tPos;
+        g_lPos   = HeadPos(local);
     }
-
-    g_active.store(true, std::memory_order_release);
+    g_hasData.store(true, std::memory_order_release);
 }
