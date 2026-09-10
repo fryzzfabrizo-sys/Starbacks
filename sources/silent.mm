@@ -7,6 +7,7 @@
 #include <mutex>
 #include <thread>
 
+extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
@@ -17,12 +18,16 @@ static constexpr uint64_t kHit_StartPos       = 0x4C;
 
 static constexpr float kHeadCenterY = 0.055f;
 
+static constexpr uint64_t kTransitionCooldownMs = 500;
+
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr = 0;
-static Vector3           g_tPos   = {};
-static Vector3           g_lPos   = {};
+static std::atomic<uint64_t> g_transitionTick{0};
+
+static uint64_t g_aimPtr   = 0;
+static Vector3  g_headPos  = {};
+static Vector3  g_localPos = {};
 
 static uint64_t g_lastMatch = 0;
 
@@ -32,7 +37,10 @@ static inline bool validPtr(uint64_t p) {
 static inline bool isZeroV3(const Vector3 &v) {
     return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
 }
-
+static inline uint64_t nowMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
@@ -40,34 +48,47 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — твой рабочий вариант (без klass check, с нормализацией)
+//  WORKER — только yield, никаких sleep_for
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::nanoseconds(1));
-        if (!g_hasData.load(std::memory_order_acquire)) continue;
+        // Кулдаун после смены матча — yield вместо sleep
+        uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
+        if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
+            std::this_thread::yield();
+            continue;
+        }
+
+        if (!g_hasData.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+            continue;
+        }
 
         uint64_t h;
-        Vector3  tPos, lPos;
+        Vector3 headPos, localPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
+            h        = g_aimPtr;
+            headPos  = g_headPos;
+            localPos = g_localPos;
         }
-        if (!validPtr(h)) continue;
+        if (!validPtr(h)) {
+            std::this_thread::yield();
+            continue;
+        }
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (isZeroV3(origin)) origin = lPos;
+        if (isZeroV3(origin)) origin = localPos;
 
-        Vector3 diff  = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
-        float   lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
-        if (lenSq <= 0.0001f) continue;
-
-        float   inv = 1.0f / std::sqrt(lenSq);
-        Vector3 dir = { diff.x*inv, diff.y*inv, diff.z*inv };
+        Vector3 dir = {
+            headPos.x - origin.x,
+            headPos.y - origin.y,
+            headPos.z - origin.z
+        };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
+
+        std::this_thread::yield();
     }
 }
 
@@ -79,39 +100,35 @@ void InitSilentAimThread() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
+    g_transitionTick.store(nowMs(), std::memory_order_release);
     g_lastMatch = 0;
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_aimPtr   = 0;
+        g_headPos  = {};
+        g_localPos = {};
+    }
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  RunSilentAim
-// ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
 
-    if (!aimsilent1 || !isVaildPtr(cachedMatch)) {
-        g_hasData.store(false, std::memory_order_release);
+    if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
+        ResetSilentAim();
+        return;
+    }
+
+    if (cachedMatch != g_lastMatch) {
+        ResetSilentAim();
+        g_lastMatch = cachedMatch;
         return;
     }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
+
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
-    // ═══ ФИКС СМЕНЫ МАТЧА ═══
-    // Отслеживаем по cachedMatch (надёжнее чем local).
-    // При смене сбрасываем aimPtr и пропускаем кадр.
-    if (cachedMatch != g_lastMatch) {
-        g_lastMatch = cachedMatch;
-        g_hasData.store(false, std::memory_order_release);
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            g_aimPtr = 0;
-        }
         return;
     }
 
@@ -121,19 +138,33 @@ void RunSilentAim() {
         return;
     }
 
-    Vector3 tPos = HeadPos(target);
-    if (isZeroV3(tPos)) {
+    Vector3 head = HeadPos(target);
+    if (isZeroV3(head)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
-    // Центр черепа вместо основания
-    tPos.y += kHeadCenterY;
+    head.y += kHeadCenterY;
+
+    Vector3 lPos = HeadPos(local);
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
+        g_aimPtr   = aimPtr;
+        g_headPos  = head;
+        g_localPos = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
+
+    // Мгновенный пинг
+    {
+        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+        if (isZeroV3(origin)) origin = lPos;
+
+        Vector3 dir = {
+            head.x - origin.x,
+            head.y - origin.y,
+            head.z - origin.z
+        };
+        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+    }
 }
