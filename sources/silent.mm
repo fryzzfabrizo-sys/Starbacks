@@ -11,7 +11,6 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
-static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 
 static Vector3           g_prevTargetPos  = {};
 static Vector3           g_targetVelocity = {};
@@ -28,7 +27,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 void InitSilentAimThread() {
-    // Больше не нужен, оставлен для совместимости заголовочника
+    // Не используется
 }
 
 void ResetSilentAim() {
@@ -45,19 +44,12 @@ void RunSilentAim() {
     if (cachedMatch != g_lastMatch) {
         g_lastMatch = cachedMatch;
         ResetSilentAim();
-        return;
     }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
-        ResetSilentAim();
-        return;
-    }
-
-    uint64_t wpn = WeaponOnHand(local);
-    if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         ResetSilentAim();
         return;
     }
