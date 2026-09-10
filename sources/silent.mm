@@ -17,41 +17,33 @@ static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
 // ═══════════════════════════════════════════════════════════════
-//  ФИЗИЧЕСКАЯ МОДЕЛЬ
-//  Позиция = current + velocity*t + 0.5*acceleration*t²
-//  где t = время полёта пули = дистанция / скорость_пули + сервер_лаг
+//  ПАРАМЕТРЫ
 // ═══════════════════════════════════════════════════════════════
 
-// ── Время полёта пули ────────────────────────────────────
-static constexpr float kBulletSpeed    = 350.0f;  // м/с — типичная скорость в FF
-static constexpr float kServerLag      = 0.030f;  // 30 мс серверная задержка
-static constexpr float kLeadMin        = 0.020f;  // минимум лида
-static constexpr float kLeadMax        = 0.100f;  // максимум
+static constexpr float kBulletSpeed    = 350.0f;
+static constexpr float kServerLag      = 0.030f;
+static constexpr float kLeadMin        = 0.020f;
+static constexpr float kLeadMax        = 0.100f;
 
-// ── Гравитация для баллистики Y ──────────────────────────
-static constexpr float kGravity        = 18.0f;   // м/с² (аркадная FF)
+static constexpr float kGravity        = 18.0f;
 
-// ── Сглаживание скорости (EMA) ───────────────────────────
 static constexpr float kSmoothVelXZ    = 0.65f;
 static constexpr float kSmoothVelY     = 0.85f;
-static constexpr float kSmoothVelYAir  = 0.98f;   // в прыжке — почти сырая
-static constexpr float kSmoothAccelXZ  = 0.30f;   // ускорение — плавнее
+static constexpr float kSmoothVelYAir  = 0.98f;
+static constexpr float kSmoothAccelXZ  = 0.30f;
 static constexpr float kSmoothAccelY   = 0.55f;
 
 static constexpr float kMaxVel         = 30.0f;
 static constexpr float kMaxAccel       = 60.0f;
 
-// ── Детект прыжка ────────────────────────────────────────
-static constexpr float kJumpVelThresh  = 0.6f;    // u/s — порог взлёта
-static constexpr float kJumpAccelThresh = 4.0f;   // u/s² — порог разгона вверх
+static constexpr float kJumpVelThresh  = 0.6f;
+static constexpr float kJumpAccelThresh = 4.0f;
 
-// ── Захват головы ────────────────────────────────────────
-static constexpr float kHeadCenterY    = 0.090f;  // по bind-pose (neck→head + череп)
+static constexpr float kHeadCenterY    = 0.090f;
 static constexpr float kAirborneExtraY = 0.015f;
 static constexpr float kCrouchExtraY   = 0.010f;
 static constexpr float kBelowBiasY     = 0.015f;
 
-// ── Границы ──────────────────────────────────────────────
 static constexpr float kMinDistance    = 0.5f;
 static constexpr float kMinLenSq       = 0.0001f;
 
@@ -64,7 +56,6 @@ static Vector3  g_tPos   = {};
 static Vector3  g_tVel   = {};
 static Vector3  g_tAccel = {};
 static Vector3  g_lPos   = {};
-static Vector3  g_lVel   = {};
 static float    g_extraY = 0.0f;
 static bool     g_tAirborne = false;
 
@@ -83,7 +74,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — пишет направление на максимальной частоте
+//  WORKER — БЕЗ компенсации origin (origin берётся из памяти как есть)
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -93,7 +84,7 @@ static void SilentWorker() {
         }
 
         uint64_t h;
-        Vector3 tPos, tVel, tAcc, lPos, lVel;
+        Vector3 tPos, tVel, tAcc, lPos;
         float   extraY;
         bool    airborne;
         {
@@ -103,17 +94,16 @@ static void SilentWorker() {
             tVel     = g_tVel;
             tAcc     = g_tAccel;
             lPos     = g_lPos;
-            lVel     = g_lVel;
             extraY   = g_extraY;
             airborne = g_tAirborne;
         }
         if (!validPtr(h)) continue;
 
-        // ── Origin: свежий из памяти игры ──────────────
+        // ── Origin: как есть из памяти игры, НИКАКИХ прибавок ──
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (isZeroV3(origin)) origin = lPos;
+        if (isZeroV3(origin)) origin = lPos; // fallback — только если игра не записала
 
-        // ── Дистанция от origin до цели ────────────────
+        // ── Дистанция ──────────────────────────────────
         float dxT = tPos.x - origin.x;
         float dyT = tPos.y - origin.y;
         float dzT = tPos.z - origin.z;
@@ -125,26 +115,16 @@ static void SilentWorker() {
         if (t < kLeadMin) t = kLeadMin;
         if (t > kLeadMax) t = kLeadMax;
 
-        // ── Физическое предсказание позиции цели ──────
-        // X: pos + v*t + 0.5*a*t²
+        // ── Физическое предсказание позиции ────────────
         float predX = tPos.x + tVel.x * t + 0.5f * tAcc.x * t * t;
         float predZ = tPos.z + tVel.z * t + 0.5f * tAcc.z * t * t;
 
-        // Y: pos + v*t + 0.5*(a - g)*t²
-        // Если в воздухе — учитываем гравитацию; на земле — только вертикальное ускорение
         float gravTerm = airborne ? -0.5f * kGravity * t * t : 0.0f;
         float predY = tPos.y + tVel.y * t + 0.5f * tAcc.y * t * t
                     + kHeadCenterY + extraY + gravTerm;
 
-        Vector3 pred = { predX, predY, predZ };
-
-        // ── Компенсация движения стрелка ───────────────
-        origin.x += lVel.x * t * 0.85f;
-        origin.y += lVel.y * t * 0.85f;
-        origin.z += lVel.z * t * 0.85f;
-
-        // ── Вектор направления ─────────────────────────
-        Vector3 diff = { pred.x - origin.x, pred.y - origin.y, pred.z - origin.z };
+        // ── Направление ────────────────────────────────
+        Vector3 diff = { predX - origin.x, predY - origin.y, predZ - origin.z };
         float lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
         if (lenSq <= kMinLenSq) continue;
 
@@ -167,20 +147,18 @@ void ResetSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
-        g_tVel = {}; g_tAccel = {}; g_lVel = {};
+        g_tVel = {}; g_tAccel = {};
         g_extraY = 0.0f;
         g_tAirborne = false;
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — считает скорость и ускорение цели/стрелка
+//  RunSilentAim
 // ═══════════════════════════════════════════════════════════════
 static Vector3 s_prevTargetPos = {};
 static Vector3 s_prevTargetVel = {};
-static Vector3 s_prevLocalPos  = {};
 static bool    s_havePrevTarget = false;
-static bool    s_havePrevLocal  = false;
 static std::chrono::steady_clock::time_point s_prevTick;
 
 void RunSilentAim() {
@@ -189,7 +167,6 @@ void RunSilentAim() {
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
         ResetSilentAim();
         s_havePrevTarget = false;
-        s_havePrevLocal  = false;
         return;
     }
 
@@ -197,7 +174,6 @@ void RunSilentAim() {
         ResetSilentAim();
         g_lastMatch = cachedMatch;
         s_havePrevTarget = false;
-        s_havePrevLocal  = false;
         s_prevTick = std::chrono::steady_clock::now();
         return;
     }
@@ -213,7 +189,6 @@ void RunSilentAim() {
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
         s_havePrevTarget = false;
-        s_havePrevLocal  = false;
         return;
     }
 
@@ -221,7 +196,6 @@ void RunSilentAim() {
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
         s_havePrevTarget = false;
-        s_havePrevLocal  = false;
         return;
     }
 
@@ -232,7 +206,7 @@ void RunSilentAim() {
         return;
     }
 
-    // ─── Скорость цели (raw → clip) ─────────────────────
+    // ─── Скорость цели ──────────────────────────────────
     Vector3 rawTVel = {0, 0, 0};
     if (s_havePrevTarget) {
         rawTVel = {
@@ -249,7 +223,7 @@ void RunSilentAim() {
     s_prevTargetPos = tPos;
     s_havePrevTarget = true;
 
-    // ─── Ускорение цели (raw → clip) ────────────────────
+    // ─── Ускорение цели ─────────────────────────────────
     Vector3 rawTAcc = {0, 0, 0};
     if (s_havePrevTarget) {
         rawTAcc = {
@@ -265,24 +239,7 @@ void RunSilentAim() {
     }
     s_prevTargetVel = rawTVel;
 
-    // ─── Скорость стрелка ───────────────────────────────
-    Vector3 rawLVel = {0, 0, 0};
-    if (s_havePrevLocal) {
-        rawLVel = {
-            (lPos.x - s_prevLocalPos.x) / dt,
-            (lPos.y - s_prevLocalPos.y) / dt,
-            (lPos.z - s_prevLocalPos.z) / dt
-        };
-        float len = std::sqrt(rawLVel.x*rawLVel.x + rawLVel.y*rawLVel.y + rawLVel.z*rawLVel.z);
-        if (len > kMaxVel) {
-            float k = kMaxVel / len;
-            rawLVel.x *= k; rawLVel.y *= k; rawLVel.z *= k;
-        }
-    }
-    s_prevLocalPos = lPos;
-    s_havePrevLocal = true;
-
-    // ─── Детект прыжка (по скорости ИЛИ ускорению) ──────
+    // ─── Детект прыжка цели ─────────────────────────────
     bool airborne = (std::fabs(rawTVel.y) > kJumpVelThresh)
                  || (std::fabs(rawTAcc.y) > kJumpAccelThresh && rawTVel.y > 0.1f);
 
@@ -296,23 +253,15 @@ void RunSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
 
-        // X/Z — обычное сглаживание
         g_tVel.x = g_tVel.x * (1.0f - kSmoothVelXZ) + rawTVel.x * kSmoothVelXZ;
         g_tVel.z = g_tVel.z * (1.0f - kSmoothVelXZ) + rawTVel.z * kSmoothVelXZ;
 
-        // Y — в воздухе почти мгновенный
         float yAlpha = airborne ? kSmoothVelYAir : kSmoothVelY;
         g_tVel.y = g_tVel.y * (1.0f - yAlpha) + rawTVel.y * yAlpha;
 
-        // Ускорение — сглаживаем отдельно
         g_tAccel.x = g_tAccel.x * (1.0f - kSmoothAccelXZ) + rawTAcc.x * kSmoothAccelXZ;
         g_tAccel.z = g_tAccel.z * (1.0f - kSmoothAccelXZ) + rawTAcc.z * kSmoothAccelXZ;
         g_tAccel.y = g_tAccel.y * (1.0f - kSmoothAccelY)  + rawTAcc.y * kSmoothAccelY;
-
-        // Скорость стрелка
-        g_lVel.x = g_lVel.x * (1.0f - kSmoothVelXZ) + rawLVel.x * kSmoothVelXZ;
-        g_lVel.y = g_lVel.y * (1.0f - kSmoothVelY)  + rawLVel.y * kSmoothVelY;
-        g_lVel.z = g_lVel.z * (1.0f - kSmoothVelXZ) + rawLVel.z * kSmoothVelXZ;
 
         g_tPos      = tPos;
         g_lPos      = lPos;
@@ -322,7 +271,7 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // ─── Мгновенный пинг (первый выстрел ловит свежее) ──
+    // ─── Мгновенный пинг — тоже без компенсации origin ───
     {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
@@ -343,10 +292,6 @@ void RunSilentAim() {
             float gravTerm = airborne ? -0.5f * kGravity * t * t : 0.0f;
             float predY = tPos.y + g_tVel.y * t + 0.5f * g_tAccel.y * t * t
                         + kHeadCenterY + extraY + gravTerm;
-
-            origin.x += g_lVel.x * t * 0.85f;
-            origin.y += g_lVel.y * t * 0.85f;
-            origin.z += g_lVel.z * t * 0.85f;
 
             Vector3 diff = { predX - origin.x, predY - origin.y, predZ - origin.z };
             float lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
