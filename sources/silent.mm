@@ -17,9 +17,8 @@ static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
 // ═══════════════════════════════════════════════════════════════
-//  ПАРАМЕТРЫ
+//  ФИЗИКА
 // ═══════════════════════════════════════════════════════════════
-
 static constexpr float kBulletSpeed    = 350.0f;
 static constexpr float kServerLag      = 0.030f;
 static constexpr float kLeadMin        = 0.020f;
@@ -32,6 +31,7 @@ static constexpr float kSmoothVelY     = 0.85f;
 static constexpr float kSmoothVelYAir  = 0.98f;
 static constexpr float kSmoothAccelXZ  = 0.30f;
 static constexpr float kSmoothAccelY   = 0.55f;
+static constexpr float kSmoothLocalVel = 0.75f;   // сглаживание своей скорости
 
 static constexpr float kMaxVel         = 30.0f;
 static constexpr float kMaxAccel       = 60.0f;
@@ -43,6 +43,11 @@ static constexpr float kHeadCenterY    = 0.090f;
 static constexpr float kAirborneExtraY = 0.015f;
 static constexpr float kCrouchExtraY   = 0.010f;
 static constexpr float kBelowBiasY     = 0.015f;
+
+// ── Компенсация задержки выстрела ────────────────────────
+// Игра применяет нашу dir через N кадров после записи.
+// 1 кадр ≈ 0.016s. Значение = доля компенсации 0.0..1.0
+static constexpr float kLocalLeadFactor = 0.65f;
 
 static constexpr float kMinDistance    = 0.5f;
 static constexpr float kMinLenSq       = 0.0001f;
@@ -56,6 +61,7 @@ static Vector3  g_tPos   = {};
 static Vector3  g_tVel   = {};
 static Vector3  g_tAccel = {};
 static Vector3  g_lPos   = {};
+static Vector3  g_lVel   = {};
 static float    g_extraY = 0.0f;
 static bool     g_tAirborne = false;
 
@@ -74,7 +80,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — БЕЗ компенсации origin (origin берётся из памяти как есть)
+//  WORKER
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -84,7 +90,7 @@ static void SilentWorker() {
         }
 
         uint64_t h;
-        Vector3 tPos, tVel, tAcc, lPos;
+        Vector3 tPos, tVel, tAcc, lPos, lVel;
         float   extraY;
         bool    airborne;
         {
@@ -94,14 +100,15 @@ static void SilentWorker() {
             tVel     = g_tVel;
             tAcc     = g_tAccel;
             lPos     = g_lPos;
+            lVel     = g_lVel;
             extraY   = g_extraY;
             airborne = g_tAirborne;
         }
         if (!validPtr(h)) continue;
 
-        // ── Origin: как есть из памяти игры, НИКАКИХ прибавок ──
+        // ── Origin как есть ─────────────────────────────
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (isZeroV3(origin)) origin = lPos; // fallback — только если игра не записала
+        if (isZeroV3(origin)) origin = lPos;
 
         // ── Дистанция ──────────────────────────────────
         float dxT = tPos.x - origin.x;
@@ -115,7 +122,16 @@ static void SilentWorker() {
         if (t < kLeadMin) t = kLeadMin;
         if (t > kLeadMax) t = kLeadMax;
 
-        // ── Физическое предсказание позиции ────────────
+        // ── Компенсация движения СВОЕГО персонажа ──────
+        // Продлеваем origin на время, за которое игра применит нашу dir
+        float localLead = t * kLocalLeadFactor;
+        Vector3 originPred = {
+            origin.x + lVel.x * localLead,
+            origin.y + lVel.y * localLead,
+            origin.z + lVel.z * localLead
+        };
+
+        // ── Физическое предсказание цели ───────────────
         float predX = tPos.x + tVel.x * t + 0.5f * tAcc.x * t * t;
         float predZ = tPos.z + tVel.z * t + 0.5f * tAcc.z * t * t;
 
@@ -123,8 +139,8 @@ static void SilentWorker() {
         float predY = tPos.y + tVel.y * t + 0.5f * tAcc.y * t * t
                     + kHeadCenterY + extraY + gravTerm;
 
-        // ── Направление ────────────────────────────────
-        Vector3 diff = { predX - origin.x, predY - origin.y, predZ - origin.z };
+        // ── Направление от предсказанного origin ───────
+        Vector3 diff = { predX - originPred.x, predY - originPred.y, predZ - originPred.z };
         float lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
         if (lenSq <= kMinLenSq) continue;
 
@@ -147,7 +163,7 @@ void ResetSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
-        g_tVel = {}; g_tAccel = {};
+        g_tVel = {}; g_tAccel = {}; g_lVel = {};
         g_extraY = 0.0f;
         g_tAirborne = false;
     }
@@ -158,7 +174,9 @@ void ResetSilentAim() {
 // ═══════════════════════════════════════════════════════════════
 static Vector3 s_prevTargetPos = {};
 static Vector3 s_prevTargetVel = {};
+static Vector3 s_prevLocalPos  = {};
 static bool    s_havePrevTarget = false;
+static bool    s_havePrevLocal  = false;
 static std::chrono::steady_clock::time_point s_prevTick;
 
 void RunSilentAim() {
@@ -167,6 +185,7 @@ void RunSilentAim() {
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
         ResetSilentAim();
         s_havePrevTarget = false;
+        s_havePrevLocal  = false;
         return;
     }
 
@@ -174,6 +193,7 @@ void RunSilentAim() {
         ResetSilentAim();
         g_lastMatch = cachedMatch;
         s_havePrevTarget = false;
+        s_havePrevLocal  = false;
         s_prevTick = std::chrono::steady_clock::now();
         return;
     }
@@ -189,6 +209,7 @@ void RunSilentAim() {
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
         s_havePrevTarget = false;
+        s_havePrevLocal  = false;
         return;
     }
 
@@ -196,6 +217,7 @@ void RunSilentAim() {
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
         s_havePrevTarget = false;
+        s_havePrevLocal  = false;
         return;
     }
 
@@ -239,6 +261,23 @@ void RunSilentAim() {
     }
     s_prevTargetVel = rawTVel;
 
+    // ─── Скорость стрелка (своя) ────────────────────────
+    Vector3 rawLVel = {0, 0, 0};
+    if (s_havePrevLocal) {
+        rawLVel = {
+            (lPos.x - s_prevLocalPos.x) / dt,
+            (lPos.y - s_prevLocalPos.y) / dt,
+            (lPos.z - s_prevLocalPos.z) / dt
+        };
+        float len = std::sqrt(rawLVel.x*rawLVel.x + rawLVel.y*rawLVel.y + rawLVel.z*rawLVel.z);
+        if (len > kMaxVel) {
+            float k = kMaxVel / len;
+            rawLVel.x *= k; rawLVel.y *= k; rawLVel.z *= k;
+        }
+    }
+    s_prevLocalPos = lPos;
+    s_havePrevLocal = true;
+
     // ─── Детект прыжка цели ─────────────────────────────
     bool airborne = (std::fabs(rawTVel.y) > kJumpVelThresh)
                  || (std::fabs(rawTAcc.y) > kJumpAccelThresh && rawTVel.y > 0.1f);
@@ -253,6 +292,7 @@ void RunSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
 
+        // Цель
         g_tVel.x = g_tVel.x * (1.0f - kSmoothVelXZ) + rawTVel.x * kSmoothVelXZ;
         g_tVel.z = g_tVel.z * (1.0f - kSmoothVelXZ) + rawTVel.z * kSmoothVelXZ;
 
@@ -263,6 +303,11 @@ void RunSilentAim() {
         g_tAccel.z = g_tAccel.z * (1.0f - kSmoothAccelXZ) + rawTAcc.z * kSmoothAccelXZ;
         g_tAccel.y = g_tAccel.y * (1.0f - kSmoothAccelY)  + rawTAcc.y * kSmoothAccelY;
 
+        // Стрелок
+        g_lVel.x = g_lVel.x * (1.0f - kSmoothLocalVel) + rawLVel.x * kSmoothLocalVel;
+        g_lVel.y = g_lVel.y * (1.0f - kSmoothLocalVel) + rawLVel.y * kSmoothLocalVel;
+        g_lVel.z = g_lVel.z * (1.0f - kSmoothLocalVel) + rawLVel.z * kSmoothLocalVel;
+
         g_tPos      = tPos;
         g_lPos      = lPos;
         g_extraY    = extraY;
@@ -271,7 +316,7 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // ─── Мгновенный пинг — тоже без компенсации origin ───
+    // ─── Мгновенный пинг ───────────────────────────────
     {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
@@ -286,6 +331,13 @@ void RunSilentAim() {
             if (t < kLeadMin) t = kLeadMin;
             if (t > kLeadMax) t = kLeadMax;
 
+            float localLead = t * kLocalLeadFactor;
+            Vector3 originPred = {
+                origin.x + g_lVel.x * localLead,
+                origin.y + g_lVel.y * localLead,
+                origin.z + g_lVel.z * localLead
+            };
+
             float predX = tPos.x + g_tVel.x * t + 0.5f * g_tAccel.x * t * t;
             float predZ = tPos.z + g_tVel.z * t + 0.5f * g_tAccel.z * t * t;
 
@@ -293,7 +345,7 @@ void RunSilentAim() {
             float predY = tPos.y + g_tVel.y * t + 0.5f * g_tAccel.y * t * t
                         + kHeadCenterY + extraY + gravTerm;
 
-            Vector3 diff = { predX - origin.x, predY - origin.y, predZ - origin.z };
+            Vector3 diff = { predX - originPred.x, predY - originPred.y, predZ - originPred.z };
             float lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
             if (lenSq > kMinLenSq) {
                 float inv = 1.0f / std::sqrt(lenSq);
