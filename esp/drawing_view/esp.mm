@@ -38,7 +38,7 @@ bool isNoReload    = NO;
 bool isVohaDan     = NO;
 bool isFastFire    = NO;
 
-bool isShowFov = YES;
+bool isShowFov = NO;   // ← по умолчанию ВЫКЛ
 
 // ─── Silent Aim ──────────────────────────────
 bool aimsilent1 = NO;
@@ -51,7 +51,6 @@ bool isAimIgnoreKnock  = NO;
 bool isAimCheckVisible = NO;
 bool isAimRage         = NO;
 bool isLineAim         = YES;
-
 
 int   box    = 0;
 int   triggerMode    = 0;
@@ -99,7 +98,8 @@ void ESPSyncFromPrefs(void) {
     isVohaDan  = ESPPrefsBool(NSSENCRYPT("VohaDan"), NO);
     isFastFire = ESPPrefsBool(NSSENCRYPT("FastFire"), NO);
 
-    isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), YES);
+    // ShowFov по умолчанию ВЫКЛ, и НИКОГДА не рисуем для Silent
+    isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
     aimsilent1 = ESPPrefsBool(NSSENCRYPT("SilentAim"), NO);
 
     box = (int)ESPPrefsFloat(NSSENCRYPT("box"), 0.0f);
@@ -130,6 +130,16 @@ void ESPSyncFromPrefs(void) {
 
     aimSpeed = ESPPrefsFloat(NSSENCRYPT("AimSpeed"), 100.0f) / 100.0f;
     aimSpeed = fmaxf(0.01f, fminf(aimSpeed, 1.0f));
+
+    // ─── Silent Aim: FOV не показываем НИКОГДА ──────────────
+    // Если Silent включён без Aimbot — принудительно выключаем FOV-круг
+    if (aimsilent1 && !isAimbot) {
+        isShowFov = NO;
+    }
+    // Страховка: FOV-круг существует только для Aimbot
+    if (!isAimbot) {
+        isShowFov = NO;
+    }
 }
 
 static uint64_t    gAimLockTarget         = 0;
@@ -458,8 +468,10 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
 
         if (stats.inMatch) {
             CGMutablePathRef fovPath = CGPathCreateMutable();
-            // FOV-круг только для aimbot. Silent работает без FOV.
-            BOOL hasFov = RenderFOVCirclePath(fovPath, vw, vh, (isAimbot && isShowFov), aimFov);
+            // FOV-круг ТОЛЬКО для aimbot. Silent всегда без FOV.
+            BOOL hasFov = (isAimbot && isShowFov && !aimsilent1)
+                          ? RenderFOVCirclePath(fovPath, vw, vh, YES, aimFov)
+                          : NO;
             self.fovLayer.path = hasFov ? fovPath : nil;
             CGPathRelease(fovPath);
 
@@ -711,7 +723,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                         bestHeadPos  = aimPos;
                     }
                 } else {
-                    // === AIMBOT: как было, с FOV ===
+                    // === AIMBOT: с FOV ===
                     if (onScreen) {
                         float dx = w2s.x - center.x;
                         float dy = w2s.y - center.y;
@@ -767,7 +779,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
 
     g_SilentBestTarget = bestTarget;
     if (aimsilent1)
-        RunSilentAim();
+        RunSilentAim();   // ← синхронно, 60 fps, без потоков
     else
         ResetSilentAim();
 
