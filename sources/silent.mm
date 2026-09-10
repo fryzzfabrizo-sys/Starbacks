@@ -17,17 +17,15 @@ static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
 static constexpr float kHeadCenterY = 0.055f;
-static constexpr uint64_t kCooldownMs = 1000;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static std::atomic<uint64_t> g_transitionTick{0};
 
-static uint64_t g_aimPtr    = 0;
-static uint64_t g_aimKlass  = 0;
-static uint64_t g_target    = 0;
-static uint64_t g_local     = 0;
+static uint64_t g_aimPtr   = 0;
+static uint64_t g_aimKlass = 0;
+static uint64_t g_target   = 0;
+static uint64_t g_local    = 0;
 static uint64_t g_lastMatch = 0;
 
 static inline bool validPtr(uint64_t p) {
@@ -36,10 +34,6 @@ static inline bool validPtr(uint64_t p) {
 static inline bool isZeroV3(const Vector3 &v) {
     return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
 }
-static inline uint64_t nowMs() {
-    using namespace std::chrono;
-    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
-}
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
@@ -47,16 +41,10 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — читаем всё свежим каждый раз
+//  WORKER — свежие head + origin каждый тик
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
-        uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
-        if (tTick != 0 && (nowMs() - tTick) < kCooldownMs) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            continue;
-        }
-
         if (!g_hasData.load(std::memory_order_acquire)) {
             std::this_thread::sleep_for(std::chrono::microseconds(500));
             continue;
@@ -82,7 +70,7 @@ static void SilentWorker() {
             continue;
         }
 
-        // Свежая позиция головы цели
+        // Свежая позиция головы
         Vector3 head = HeadPos(target);
         if (isZeroV3(head)) { std::this_thread::yield(); continue; }
         head.y += kHeadCenterY;
@@ -107,7 +95,6 @@ void InitSilentAimThread() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    g_transitionTick.store(nowMs(), std::memory_order_release);
     g_lastMatch = 0;
     {
         std::lock_guard<std::mutex> lk(g_lock);
@@ -119,7 +106,7 @@ void ResetSilentAim() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — только обновляем указатели
+//  RunSilentAim — только указатели, никакой математики
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -149,7 +136,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Класс для защиты от переиспользования памяти
     uint64_t klass = ReadAddr<uint64_t>(aimPtr + 0);
     if (!validPtr(klass)) {
         g_hasData.store(false, std::memory_order_release);
