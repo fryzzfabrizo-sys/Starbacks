@@ -43,8 +43,11 @@ static constexpr float kBelowBiasY     = 0.015f;
 
 static constexpr float kMinDistance    = 0.5f;
 
-// ── Защита от краша при смене матча ──────────────────────
+// ── Защита от краша ──────────────────────────────────────
 static constexpr uint64_t kTransitionCooldownMs = 500;
+// Троттлинг: ~2000 Гц максимум. Больше не нужно — при стрельбе игра сама
+// вызывает reycast десятки раз в секунду, лишние записи = лишние шансы на гонку.
+static constexpr int      kWorkerSleepUs       = 500;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -52,7 +55,7 @@ static std::atomic<bool> g_started{false};
 static std::atomic<bool> g_matchReady{false};
 static std::atomic<uint64_t> g_transitionTick{0};
 
-static uint64_t g_aimPtr     = 0;
+static uint64_t g_aimPtr      = 0;
 static uint64_t g_localPlayer = 0;
 static Vector3  g_tPos   = {};
 static Vector3  g_tVel   = {};
@@ -80,30 +83,30 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER с защитой от протухших указателей
+//  WORKER — пишет ТОЛЬКО когда игрок стреляет (как в C# Electron)
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
-        // 1) Ждём, пока RunSilentAim разрешит работу
+        // 1) Основной предохранитель: работа разрешена?
         if (!g_matchReady.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
+            std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
             continue;
         }
 
-        // 2) Кулдаун после смены матча — Unity успевает освободить старую память
+        // 2) Кулдаун после смены матча
         uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
         if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
 
-        // 3) Есть данные?
+        // 3) Есть данные для записи?
         if (!g_hasData.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
+            std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
             continue;
         }
 
-        // 4) Снимок под мьютексом
+        // 4) Снимок
         uint64_t h, local;
         Vector3 tPos, tVel, tAcc, lPos;
         float   extraY;
@@ -119,14 +122,26 @@ static void SilentWorker() {
             extraY   = g_extraY;
             airborne = g_tAirborne;
         }
+        if (!validPtr(h) || !validPtr(local)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
+            continue;
+        }
 
-        // 5) Валидация указателей (адресный диапазон)
-        if (!validPtr(h) || !validPtr(local)) continue;
+        // 5) КЛЮЧЕВАЯ ЗАЩИТА ОТ КРАША: пишем ТОЛЬКО когда игрок стреляет.
+        //    В этот момент игра держит структуру активной — GC её не трогает.
+        //    Между выстрелами поле не трогаем вообще → не портим managed heap.
+        if (!get_IsFiring(local)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
+            continue;
+        }
 
-        // 6) КЛЮЧЕВАЯ ЗАЩИТА: перечитываем aimPtr из живого local.
-        //    Если игра освободила LastAimInfo — увидим несовпадение.
+        // 6) Перечитываем aimPtr из живого local — если игра освободила
+        //    LastAimInfo или переиспользовала адрес, увидим несовпадение
         uint64_t liveAimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-        if (liveAimPtr != h) continue;   // ← память переиспользована, пропускаем
+        if (liveAimPtr != h) {
+            std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
+            continue;
+        }
 
         // 7) Origin как есть из игры
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
@@ -149,19 +164,19 @@ static void SilentWorker() {
         float predY = tPos.y + tVel.y * t + 0.5f * tAcc.y * t * t
                     + kHeadCenterY + extraY + gravTerm;
 
-        // RAW вектор (без нормализации — работает лучше)
         Vector3 dir = {
             predX - origin.x,
             predY - origin.y,
             predZ - origin.z
         };
 
-        // 8) Финальная валидация непосредственно перед записью
-        //    (после чтения origin память может освободиться — защитный повтор)
+        // 8) Финальная валидация перед записью
         if (!g_matchReady.load(std::memory_order_acquire)) continue;
-        if (!validPtr(h)) continue;
+        if (!get_IsFiring(local)) continue;   // ещё раз — момент мог уйти
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
+
+        std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
     }
 }
 
@@ -197,14 +212,12 @@ static std::chrono::steady_clock::time_point s_prevTick;
 void RunSilentAim() {
     InitSilentAimThread();
 
-    // ─── Лобби / выключено / нет матча → полный сброс ──
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
         ResetSilentAim();
         s_havePrevTarget = false;
         return;
     }
 
-    // ─── Смена матча → сброс + кулдаун ──
     if (cachedMatch != g_lastMatch) {
         ResetSilentAim();
         g_lastMatch = cachedMatch;
@@ -244,7 +257,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Скорость цели
     Vector3 rawTVel = {0, 0, 0};
     if (s_havePrevTarget) {
         rawTVel = {
@@ -261,7 +273,6 @@ void RunSilentAim() {
     s_prevTargetPos = tPos;
     s_havePrevTarget = true;
 
-    // Ускорение цели
     Vector3 rawTAcc = {0, 0, 0};
     if (s_havePrevTarget) {
         rawTAcc = {
@@ -302,20 +313,21 @@ void RunSilentAim() {
         g_lPos        = lPos;
         g_extraY      = extraY;
         g_aimPtr      = aimPtr;
-        g_localPlayer = local;      // ← теперь worker валидирует по нему
+        g_localPlayer = local;
         g_tAirborne   = airborne;
     }
 
     g_hasData.store(true, std::memory_order_release);
 
-    // Разрешаем работу worker только после кулдауна
     uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
     if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-        return;   // подождём ещё
+        return;
     }
     g_matchReady.store(true, std::memory_order_release);
 
-    // ─── Мгновенный пинг ───
+    // Мгновенный пинг — тоже только если стреляем
+    if (!get_IsFiring(local)) return;
+
     {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
@@ -338,9 +350,9 @@ void RunSilentAim() {
 
             Vector3 dir = { predX - origin.x, predY - origin.y, predZ - origin.z };
 
-            // Повторная валидация перед пингом (память могла освободиться)
+            // Финальная валидация: жив ли ещё local и есть ли firing
             uint64_t liveAimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-            if (liveAimPtr == aimPtr) {
+            if (liveAimPtr == aimPtr && get_IsFiring(local)) {
                 WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
             }
         }
