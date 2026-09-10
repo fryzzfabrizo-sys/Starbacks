@@ -26,8 +26,6 @@ static Vector3           g_lPos           = {};
 static Vector3           g_prevTargetPos  = {};
 static Vector3           g_targetVelocity = {};
 
-static uint64_t          g_lastLocal      = 0;
-static uint64_t          g_lastTarget     = 0;
 static uint64_t          g_lastMatch      = 0;
 
 static inline bool validPtr(uint64_t p) {
@@ -43,23 +41,22 @@ static Vector3 HeadPos(uint64_t pawn) {
 static void SilentWorker() {
     while (true) {
         if (!g_hasData.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
 
-        uint64_t h, currentMatch;
+        uint64_t h;
         Vector3  tPos, lPos, vel;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h            = g_aimPtr;
-            tPos         = g_tPos;
-            lPos         = g_lPos;
-            vel          = g_targetVelocity;
-            currentMatch = cachedMatch;
+            h    = g_aimPtr;
+            tPos = g_tPos;
+            lPos = g_lPos;
+            vel  = g_targetVelocity;
         }
 
-        if (!validPtr(h) || !isVaildPtr(currentMatch) || IsAtLobby(Moudule_Base)) {
-            g_hasData.store(false, std::memory_order_release);
+        if (!validPtr(h)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
 
@@ -75,12 +72,16 @@ static void SilentWorker() {
 
         Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
         float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-        if (lenSq <= 0.0001f) continue;
+        if (lenSq <= 0.0001f) {
+            std::this_thread::yield();
+            continue;
+        }
 
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
+        std::this_thread::yield();
     }
 }
 
@@ -92,9 +93,6 @@ void InitSilentAimThread() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    g_lastLocal      = 0;
-    g_lastTarget     = 0;
-    g_lastMatch      = 0;
     g_prevTargetPos  = {};
     g_targetVelocity = {};
     std::lock_guard<std::mutex> lk(g_lock);
@@ -112,40 +110,31 @@ void RunSilentAim() {
     if (cachedMatch != g_lastMatch) {
         g_lastMatch = cachedMatch;
         ResetSilentAim();
-        return;
     }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
 
-    if (!isVaildPtr(local) || !isVaildPtr(target) || IsAtLobby(Moudule_Base)) {
+    if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
     Vector3 tPos = HeadPos(target);
     if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
@@ -174,5 +163,6 @@ void RunSilentAim() {
         g_tPos   = tPos;
         g_lPos   = HeadPos(local);
     }
+    
     g_hasData.store(true, std::memory_order_release);
 }
