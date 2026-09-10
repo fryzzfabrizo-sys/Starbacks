@@ -19,7 +19,9 @@ static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr        = 0;
+
+// Тред читает local напрямую каждую итерацию — нет кэширования aimPtr
+static uint64_t          g_local         = 0;
 static Vector3           g_tPos          = {};
 static Vector3           g_lPos          = {};
 static Vector3           g_prevTargetPos = {};
@@ -38,16 +40,20 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h;
+        uint64_t local;
         Vector3  tPos, lPos, vel;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
-            vel  = g_targetVelocity;
+            local = g_local;
+            tPos  = g_tPos;
+            lPos  = g_lPos;
+            vel   = g_targetVelocity;
         }
-        if (!isVaildPtr(h)) { g_hasData.store(false, std::memory_order_release); continue; }
+        if (!isVaildPtr(local)) continue;
+
+        // Читаем aimPtr свежим каждую итерацию — автоматически берёт новый матч
+        uint64_t h = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
+        if (!isVaildPtr(h)) continue;
 
         Vector3 pred = { tPos.x + vel.x*0.06f, tPos.y + vel.y*0.06f, tPos.z + vel.z*0.06f };
 
@@ -90,12 +96,6 @@ void RunSilentAim() {
         return;
     }
 
-    uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-    if (!isVaildPtr(aimPtr)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
     Vector3 tPos = HeadPos(target);
     if (tPos.x == 0 && tPos.y == 0 && tPos.z == 0) {
         g_hasData.store(false, std::memory_order_release);
@@ -112,9 +112,9 @@ void RunSilentAim() {
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
+        g_local = local;
+        g_tPos  = tPos;
+        g_lPos  = HeadPos(local);
     }
     g_hasData.store(true, std::memory_order_release);
 }
@@ -124,5 +124,5 @@ void ResetSilentAim() {
     g_prevTargetPos  = {};
     g_targetVelocity = {};
     std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
+    g_local = 0;
 }
