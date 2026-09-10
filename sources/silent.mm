@@ -23,7 +23,6 @@ static constexpr float kBulletSpeed    = 350.0f;
 static constexpr float kServerLag      = 0.030f;
 static constexpr float kLeadMin        = 0.020f;
 static constexpr float kLeadMax        = 0.100f;
-
 static constexpr float kGravity        = 18.0f;
 
 static constexpr float kSmoothVelXZ    = 0.65f;
@@ -34,7 +33,6 @@ static constexpr float kSmoothAccelY   = 0.55f;
 
 static constexpr float kMaxVel         = 30.0f;
 static constexpr float kMaxAccel       = 60.0f;
-
 static constexpr float kJumpVelThresh  = 0.6f;
 static constexpr float kJumpAccelThresh = 4.0f;
 
@@ -45,11 +43,17 @@ static constexpr float kBelowBiasY     = 0.015f;
 
 static constexpr float kMinDistance    = 0.5f;
 
+// ── Защита от краша при смене матча ──────────────────────
+static constexpr uint64_t kTransitionCooldownMs = 500;
+
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
+static std::atomic<bool> g_matchReady{false};
+static std::atomic<uint64_t> g_transitionTick{0};
 
-static uint64_t g_aimPtr = 0;
+static uint64_t g_aimPtr     = 0;
+static uint64_t g_localPlayer = 0;
 static Vector3  g_tPos   = {};
 static Vector3  g_tVel   = {};
 static Vector3  g_tAccel = {};
@@ -65,6 +69,10 @@ static inline bool validPtr(uint64_t p) {
 static inline bool isZeroV3(const Vector3 &v) {
     return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
 }
+static inline uint64_t nowMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
@@ -72,22 +80,38 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — пишет RAW вектор target - origin, без нормализации
+//  WORKER с защитой от протухших указателей
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
+        // 1) Ждём, пока RunSilentAim разрешит работу
+        if (!g_matchReady.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+            continue;
+        }
+
+        // 2) Кулдаун после смены матча — Unity успевает освободить старую память
+        uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
+        if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        // 3) Есть данные?
         if (!g_hasData.load(std::memory_order_acquire)) {
             std::this_thread::yield();
             continue;
         }
 
-        uint64_t h;
+        // 4) Снимок под мьютексом
+        uint64_t h, local;
         Vector3 tPos, tVel, tAcc, lPos;
         float   extraY;
         bool    airborne;
         {
             std::lock_guard<std::mutex> lk(g_lock);
             h        = g_aimPtr;
+            local    = g_localPlayer;
             tPos     = g_tPos;
             tVel     = g_tVel;
             tAcc     = g_tAccel;
@@ -95,25 +119,29 @@ static void SilentWorker() {
             extraY   = g_extraY;
             airborne = g_tAirborne;
         }
-        if (!validPtr(h)) continue;
 
-        // Свежий origin каждый проход
+        // 5) Валидация указателей (адресный диапазон)
+        if (!validPtr(h) || !validPtr(local)) continue;
+
+        // 6) КЛЮЧЕВАЯ ЗАЩИТА: перечитываем aimPtr из живого local.
+        //    Если игра освободила LastAimInfo — увидим несовпадение.
+        uint64_t liveAimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
+        if (liveAimPtr != h) continue;   // ← память переиспользована, пропускаем
+
+        // 7) Origin как есть из игры
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
 
-        // Дистанция (только для времени полёта)
         float dxT = tPos.x - origin.x;
         float dyT = tPos.y - origin.y;
         float dzT = tPos.z - origin.z;
         float dist = std::sqrt(dxT*dxT + dyT*dyT + dzT*dzT);
         if (dist < kMinDistance) continue;
 
-        // Время полёта пули
         float t = dist / kBulletSpeed + kServerLag;
         if (t < kLeadMin) t = kLeadMin;
         if (t > kLeadMax) t = kLeadMax;
 
-        // Физическое предсказание позиции цели
         float predX = tPos.x + tVel.x * t + 0.5f * tAcc.x * t * t;
         float predZ = tPos.z + tVel.z * t + 0.5f * tAcc.z * t * t;
 
@@ -121,12 +149,17 @@ static void SilentWorker() {
         float predY = tPos.y + tVel.y * t + 0.5f * tAcc.y * t * t
                     + kHeadCenterY + extraY + gravTerm;
 
-        // RAW вектор — БЕЗ нормализации (игра сама нормализует)
+        // RAW вектор (без нормализации — работает лучше)
         Vector3 dir = {
             predX - origin.x,
             predY - origin.y,
             predZ - origin.z
         };
+
+        // 8) Финальная валидация непосредственно перед записью
+        //    (после чтения origin память может освободиться — защитный повтор)
+        if (!g_matchReady.load(std::memory_order_acquire)) continue;
+        if (!validPtr(h)) continue;
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
@@ -140,10 +173,13 @@ void InitSilentAimThread() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
+    g_matchReady.store(false, std::memory_order_release);
+    g_transitionTick.store(nowMs(), std::memory_order_release);
     g_lastMatch = 0;
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
+        g_localPlayer = 0;
         g_tVel = {}; g_tAccel = {};
         g_extraY = 0.0f;
         g_tAirborne = false;
@@ -161,12 +197,14 @@ static std::chrono::steady_clock::time_point s_prevTick;
 void RunSilentAim() {
     InitSilentAimThread();
 
+    // ─── Лобби / выключено / нет матча → полный сброс ──
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
         ResetSilentAim();
         s_havePrevTarget = false;
         return;
     }
 
+    // ─── Смена матча → сброс + кулдаун ──
     if (cachedMatch != g_lastMatch) {
         ResetSilentAim();
         g_lastMatch = cachedMatch;
@@ -185,6 +223,7 @@ void RunSilentAim() {
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
+        g_matchReady.store(false, std::memory_order_release);
         s_havePrevTarget = false;
         return;
     }
@@ -192,6 +231,7 @@ void RunSilentAim() {
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
+        g_matchReady.store(false, std::memory_order_release);
         s_havePrevTarget = false;
         return;
     }
@@ -200,6 +240,7 @@ void RunSilentAim() {
     Vector3 lPos = HeadPos(local);
     if (isZeroV3(tPos) || isZeroV3(lPos)) {
         g_hasData.store(false, std::memory_order_release);
+        g_matchReady.store(false, std::memory_order_release);
         return;
     }
 
@@ -236,11 +277,9 @@ void RunSilentAim() {
     }
     s_prevTargetVel = rawTVel;
 
-    // Детект прыжка цели
     bool airborne = (std::fabs(rawTVel.y) > kJumpVelThresh)
                  || (std::fabs(rawTAcc.y) > kJumpAccelThresh && rawTVel.y > 0.1f);
 
-    // Контекстные бонусы Y
     float extraY = 0.0f;
     if (rawTVel.y >  0.4f) extraY += kAirborneExtraY;
     if (rawTVel.y < -0.4f) extraY += kCrouchExtraY;
@@ -252,7 +291,6 @@ void RunSilentAim() {
 
         g_tVel.x = g_tVel.x * (1.0f - kSmoothVelXZ) + rawTVel.x * kSmoothVelXZ;
         g_tVel.z = g_tVel.z * (1.0f - kSmoothVelXZ) + rawTVel.z * kSmoothVelXZ;
-
         float yAlpha = airborne ? kSmoothVelYAir : kSmoothVelY;
         g_tVel.y = g_tVel.y * (1.0f - yAlpha) + rawTVel.y * yAlpha;
 
@@ -260,15 +298,24 @@ void RunSilentAim() {
         g_tAccel.z = g_tAccel.z * (1.0f - kSmoothAccelXZ) + rawTAcc.z * kSmoothAccelXZ;
         g_tAccel.y = g_tAccel.y * (1.0f - kSmoothAccelY)  + rawTAcc.y * kSmoothAccelY;
 
-        g_tPos      = tPos;
-        g_lPos      = lPos;
-        g_extraY    = extraY;
-        g_aimPtr    = aimPtr;
-        g_tAirborne = airborne;
+        g_tPos        = tPos;
+        g_lPos        = lPos;
+        g_extraY      = extraY;
+        g_aimPtr      = aimPtr;
+        g_localPlayer = local;      // ← теперь worker валидирует по нему
+        g_tAirborne   = airborne;
     }
+
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенный пинг — тоже RAW
+    // Разрешаем работу worker только после кулдауна
+    uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
+    if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
+        return;   // подождём ещё
+    }
+    g_matchReady.store(true, std::memory_order_release);
+
+    // ─── Мгновенный пинг ───
     {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
@@ -285,18 +332,17 @@ void RunSilentAim() {
 
             float predX = tPos.x + g_tVel.x * t + 0.5f * g_tAccel.x * t * t;
             float predZ = tPos.z + g_tVel.z * t + 0.5f * g_tAccel.z * t * t;
-
             float gravTerm = airborne ? -0.5f * kGravity * t * t : 0.0f;
             float predY = tPos.y + g_tVel.y * t + 0.5f * g_tAccel.y * t * t
                         + kHeadCenterY + extraY + gravTerm;
 
-            Vector3 dir = {
-                predX - origin.x,
-                predY - origin.y,
-                predZ - origin.z
-            };
+            Vector3 dir = { predX - origin.x, predY - origin.y, predZ - origin.z };
 
-            WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+            // Повторная валидация перед пингом (память могла освободиться)
+            uint64_t liveAimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
+            if (liveAimPtr == aimPtr) {
+                WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+            }
         }
     }
 }
