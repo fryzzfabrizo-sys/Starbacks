@@ -29,7 +29,7 @@
 #define kPlayerIDStruct         0x2D0
 #define kPlayerID               0x3A0
 #define kUserID                 0x3A0
-#define kIsClientBot            0x448
+#define kIsClientBot            0x438
 #define kDataPool               0x70
 #define kDataPoolInner          0x10
 #define kDataPoolEntriesBase    0x20
@@ -63,7 +63,7 @@
 #define kTransformIndex         0x40
 #define kMatrixList             0x18
 #define kMatrixIndices          0x20
-#define kNickname               0x438
+#define kNickname               0x430
 #define kStringFirstChar        0x14
 // ─── Weapon ───────────────────────────────────
 #define _0x5BC2862 0x6E8//protected OMELKCOGCBK LPEALCPGJBL; // 0x6D8
