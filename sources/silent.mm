@@ -30,10 +30,14 @@ static constexpr float kSmoothVelY  = 0.85f;
 // ── Защита от краша при смене матча ──────────────────────
 static constexpr uint64_t kTransitionCooldownMs = 500;
 
-// ── ОПТИМИЗАЦИЯ: интервал Worker'а ───────────────────────
-// 100 µs = 10 000 итераций/сек. 60 fps игре хватает с головой.
-// Было yield() = миллионы итераций = 100% CPU.
-static constexpr int kWorkerSleepUs = 100;
+// ═══════════════════════════════════════════════════════════════
+//  ГЛАВНАЯ ИДЕЯ: вся математика (лид, EMA) считается в RunSilentAim
+//  один раз в кадр. Worker в горячем цикле делает МИНИМУМ:
+//    origin = Read(h + 0x4C)
+//    dir = predTarget - origin
+//    Write(h + 0x40, dir)
+//  Никаких sqrt, никаких EMA, никаких Vector3-операций.
+// ═══════════════════════════════════════════════════════════════
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -41,9 +45,8 @@ static std::atomic<bool> g_started{false};
 static std::atomic<uint64_t> g_transitionTick{0};
 
 static uint64_t g_aimPtr   = 0;
-static Vector3  g_headPos  = {};
-static Vector3  g_headVel  = {};
-static Vector3  g_localPos = {};
+static Vector3  g_predTarget = {};   // предвычисленная цель (head + lead)
+static Vector3  g_localPos   = {};
 
 static uint64_t g_lastMatch = 0;
 
@@ -68,11 +71,11 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — с адаптивным sleep, минимальная нагрузка
+//  WORKER — МИНИМУМ операций в горячем цикле
+//  Нет sqrt. Нет EMA. Нет вычисления лида. Только вычитание.
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
-        // Кулдаун после смены матча
         uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
         if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -80,47 +83,37 @@ static void SilentWorker() {
         }
 
         if (!g_hasData.load(std::memory_order_acquire)) {
-            // Нет цели — спим дольше, не грузим CPU
+            // Цели нет — спим долго, не тратим CPU
             std::this_thread::sleep_for(std::chrono::microseconds(500));
             continue;
         }
 
+        // Снимок: aimPtr, predTarget, localPos
         uint64_t h;
-        Vector3 headPos, headVel, localPos;
+        Vector3 pred, localPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
             h        = g_aimPtr;
-            headPos  = g_headPos;
-            headVel  = g_headVel;
+            pred     = g_predTarget;
             localPos = g_localPos;
         }
         if (!validPtr(h)) {
-            std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
+            std::this_thread::yield();
             continue;
         }
 
-        // Читаем origin один раз
+        // Один ReadAddr
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = localPos;
 
-        // Предсказание
-        Vector3 pred = {
-            headPos.x + headVel.x * kLeadTime,
-            headPos.y + headVel.y * kLeadTime,
-            headPos.z + headVel.z * kLeadTime
-        };
+        // Минимум математики: три вычитания
+        Vector3 dir = { pred.x - origin.x, pred.y - origin.y, pred.z - origin.z };
 
-        // RAW вектор
-        Vector3 dir = {
-            pred.x - origin.x,
-            pred.y - origin.y,
-            pred.z - origin.z
-        };
-
+        // Один WriteAddr
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
 
-        // Основной интервал — 100 µs = 10 000 итераций/сек
-        std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
+        // yield без sleep — максимальная частота
+        std::this_thread::yield();
     }
 }
 
@@ -138,14 +131,13 @@ void ResetSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
-        g_headPos = {};
-        g_headVel = {};
+        g_predTarget = {};
         g_localPos = {};
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — только обновление данных, без пинга
+//  RunSilentAim — вся математика здесь (60 fps)
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -189,7 +181,7 @@ void RunSilentAim() {
         return;
     }
 
-    // Скорость цели
+    // ─── Скорость цели (raw → clip) ─────────────────────
     Vector3 rawVel = {0, 0, 0};
     if (s_havePrevTarget) {
         rawVel = {
@@ -206,22 +198,27 @@ void RunSilentAim() {
     s_prevTargetPos = head;
     s_havePrevTarget = true;
 
-    head.y += kHeadCenterY;
+    // ─── EMA (глобальные состояния — static в этой функции) ───
+    static Vector3 s_vel = {0, 0, 0};
+    s_vel.x = s_vel.x * (1.0f - kSmoothVelXZ) + rawVel.x * kSmoothVelXZ;
+    s_vel.z = s_vel.z * (1.0f - kSmoothVelXZ) + rawVel.z * kSmoothVelXZ;
+    s_vel.y = s_vel.y * (1.0f - kSmoothVelY)  + rawVel.y * kSmoothVelY;
+
+    // ─── Финальная предвычисленная цель: head + центр черепа + лид ─
+    Vector3 pred = {
+        head.x + s_vel.x * kLeadTime,
+        head.y + kHeadCenterY + s_vel.y * kLeadTime,
+        head.z + s_vel.z * kLeadTime
+    };
+
     Vector3 lPos = HeadPos(local);
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-
-        g_headVel.x = g_headVel.x * (1.0f - kSmoothVelXZ) + rawVel.x * kSmoothVelXZ;
-        g_headVel.z = g_headVel.z * (1.0f - kSmoothVelXZ) + rawVel.z * kSmoothVelXZ;
-        g_headVel.y = g_headVel.y * (1.0f - kSmoothVelY)  + rawVel.y * kSmoothVelY;
-
-        g_aimPtr   = aimPtr;
-        g_headPos  = head;
-        g_localPos = lPos;
+        g_aimPtr     = aimPtr;
+        g_predTarget = pred;
+        g_localPos   = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
-
-    // Пинг убран — Worker и так пишет 10 000 раз/сек.
-    // Это экономит кадры main-thread.
+    // Пинг не нужен — Worker и так пишет на максимальной частоте.
 }
