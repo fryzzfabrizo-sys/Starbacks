@@ -19,21 +19,22 @@ static constexpr uint64_t kHit_StartPos       = 0x4C;
 // ── Захват головы ─────────────────────────────────────────
 static constexpr float kHeadCenterY = 0.055f;
 
-// ── Микро-лид для движущихся врагов ──────────────────────
-static constexpr float kLeadTime = 0.025f;
+// ── Лид по движущимся целям ──────────────────────────────
+static constexpr float kLeadTime = 0.035f;
 static constexpr float kMaxVel   = 30.0f;
 
-// ── Сглаживание скорости ────────────────────────────────
-static constexpr float kSmoothVelXZ = 0.70f;
-static constexpr float kSmoothVelY  = 0.85f;
+// ── EMA скорости ─────────────────────────────────────────
+static constexpr float kSmoothVelXZ = 0.80f;
+static constexpr float kSmoothVelY  = 0.90f;
 
 // ── Защита от краша при смене матча ──────────────────────
-static constexpr uint64_t kTransitionCooldownMs = 500;
+static constexpr uint64_t kTransitionCooldownMs = 1000;   // было 500
+
+// ── Санити-проверка origin ───────────────────────────────
+static constexpr float kMaxOriginDistSq = 500.0f * 500.0f;
 
 // ═══════════════════════════════════════════════════════════════
-//  Вся математика (лид + EMA + центр черепа) считается
-//  один раз в кадр в RunSilentAim. Worker в горячем цикле
-//  делает МИНИМУМ: Read origin + 3 вычитания + Write.
+//  Глобальное состояние
 // ═══════════════════════════════════════════════════════════════
 
 static std::mutex        g_lock;
@@ -42,7 +43,8 @@ static std::atomic<bool> g_started{false};
 static std::atomic<uint64_t> g_transitionTick{0};
 
 static uint64_t g_aimPtr     = 0;
-static Vector3  g_predTarget = {};   // предвычисленная цель (head + lead)
+static uint64_t g_aimKlass   = 0;    // КЛЮЧЕВОЕ: klass pointer для проверки
+static Vector3  g_predTarget = {};
 static Vector3  g_localPos   = {};
 
 static uint64_t g_lastMatch = 0;
@@ -68,8 +70,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — минимум операций. Без sqrt. Без EMA. Без чтения Head.
-//  Только Read origin + 3 вычитания + Write.
+//  WORKER — с проверкой klass pointer
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -84,31 +85,45 @@ static void SilentWorker() {
             continue;
         }
 
-        // Снимок: aimPtr, predTarget, localPos
-        uint64_t h;
+        uint64_t h, expectedKlass;
         Vector3 pred, localPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h        = g_aimPtr;
-            pred     = g_predTarget;
-            localPos = g_localPos;
+            h             = g_aimPtr;
+            expectedKlass = g_aimKlass;
+            pred          = g_predTarget;
+            localPos      = g_localPos;
         }
-        if (!validPtr(h)) {
+        if (!validPtr(h) || expectedKlass == 0) {
             std::this_thread::yield();
             continue;
         }
 
-        // Один ReadAddr
+        // ═══ ЗАЩИТА №1: KLASS POINTER ═══
+        // Первые 8 байт любого IL2CPP-объекта — klass pointer.
+        // Если память h переиспользована под другой объект — klass не совпадёт.
+        uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
+        if (curKlass != expectedKlass) {
+            std::this_thread::yield();
+            continue;
+        }
+
+        // Read origin
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = localPos;
 
-        // Три вычитания
-        Vector3 dir = { pred.x - origin.x, pred.y - origin.y, pred.z - origin.z };
+        // ═══ ЗАЩИТА №2: SANITY CHECK ═══
+        // Origin должен быть рядом с локальным игроком (в радиусе 500м).
+        // Если далеко — память повреждена, не пишем.
+        float dxo = origin.x - localPos.x;
+        float dyo = origin.y - localPos.y;
+        float dzo = origin.z - localPos.z;
+        float originDistSq = dxo*dxo + dyo*dyo + dzo*dzo;
+        if (originDistSq > kMaxOriginDistSq) continue;
 
-        // Один WriteAddr
+        Vector3 dir = { pred.x - origin.x, pred.y - origin.y, pred.z - origin.z };
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
 
-        // Максимальная частота без sleep
         std::this_thread::yield();
     }
 }
@@ -127,13 +142,14 @@ void ResetSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
+        g_aimKlass = 0;
         g_predTarget = {};
         g_localPos = {};
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — вся математика здесь (60 fps)
+//  RunSilentAim
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -171,13 +187,20 @@ void RunSilentAim() {
         return;
     }
 
+    // ─── Читаем klass pointer HitObjectInfo ──────────────
+    uint64_t klass = ReadAddr<uint64_t>(aimPtr + 0);
+    if (!validPtr(klass)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
     Vector3 head = HeadPos(target);
     if (isZeroV3(head)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
 
-    // ─── Скорость цели (raw → clip) ─────────────────────
+    // ─── Скорость цели ──────────────────────────────────
     Vector3 rawVel = {0, 0, 0};
     if (s_havePrevTarget) {
         rawVel = {
@@ -200,7 +223,7 @@ void RunSilentAim() {
     s_vel.z = s_vel.z * (1.0f - kSmoothVelXZ) + rawVel.z * kSmoothVelXZ;
     s_vel.y = s_vel.y * (1.0f - kSmoothVelY)  + rawVel.y * kSmoothVelY;
 
-    // ─── Финальная предвычисленная цель ─────────────────
+    // ─── Предвычисление цели ────────────────────────────
     Vector3 pred = {
         head.x + s_vel.x * kLeadTime,
         head.y + kHeadCenterY + s_vel.y * kLeadTime,
@@ -212,6 +235,7 @@ void RunSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr     = aimPtr;
+        g_aimKlass   = klass;
         g_predTarget = pred;
         g_localPos   = lPos;
     }
