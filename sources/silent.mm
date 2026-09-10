@@ -28,8 +28,7 @@ static std::atomic<bool> g_started{false};
 static std::atomic<uint64_t> g_transitionTick{0};
 
 static uint64_t g_aimPtr    = 0;
-static uint64_t g_target    = 0; // для свежего HeadPos в треде
-static uint64_t g_local     = 0; // для свежего localPos в треде
+static uint64_t g_target    = 0;
 static Vector3  g_smoothVel = {};
 static Vector3  g_localPos  = {};
 static uint64_t g_lastMatch = 0;
@@ -56,8 +55,6 @@ static Vector3 HeadPos(uint64_t pawn) {
 
 // ═══════════════════════════════════════════════════════════════
 //  WORKER — читает HeadPos свежим каждую итерацию
-//  При повороте камеры origin меняется мгновенно (читается из h+0x4C)
-//  При движении цели head меняется мгновенно (читается из g_target)
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -72,13 +69,12 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h, target, local;
+        uint64_t h, target;
         Vector3  smoothVel, localPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
             h         = g_aimPtr;
             target    = g_target;
-            local     = g_local;
             smoothVel = g_smoothVel;
             localPos  = g_localPos;
         }
@@ -87,20 +83,19 @@ static void SilentWorker() {
             continue;
         }
 
-        // Свежая позиция головы каждую итерацию (важно при движении цели)
+        // Свежая позиция головы каждую итерацию
         Vector3 head = HeadPos(target);
         if (isZeroV3(head)) { std::this_thread::yield(); continue; }
 
-        // Читаем origin свежим (меняется при повороте камеры)
+        // Свежий origin (меняется при повороте камеры)
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = localPos;
 
-        // Distance-based lead: ближе = меньше компенсации
+        // Distance-based lead
         float dx = head.x - origin.x;
         float dy = head.y - origin.y;
         float dz = head.z - origin.z;
         float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
-        // lead = distance * 0.0006 + 0.010 (≈20m→0.022s, 50m→0.040s, 100m→0.070s)
         float lead = dist * 0.0006f + 0.010f;
         if (lead > 0.10f) lead = 0.10f;
 
@@ -132,14 +127,13 @@ void ResetSilentAim() {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr    = 0;
         g_target    = 0;
-        g_local     = 0;
         g_smoothVel = {};
         g_localPos  = {};
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — EMA скорости (60fps), всё тяжёлое здесь
+//  RunSilentAim — EMA скорости (60fps)
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -148,7 +142,6 @@ void RunSilentAim() {
         ResetSilentAim(); return;
     }
 
-    // Смена матча (работает и в реальных матчах, не только тренировке)
     if (cachedMatch != g_lastMatch) {
         ResetSilentAim();
         g_lastMatch = cachedMatch;
@@ -203,13 +196,11 @@ void RunSilentAim() {
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        // EMA обновляем под локом чтобы тред читал актуальный smoothVel
         g_smoothVel.x = g_smoothVel.x * (1-kSmoothVelXZ) + rawVel.x * kSmoothVelXZ;
         g_smoothVel.z = g_smoothVel.z * (1-kSmoothVelXZ) + rawVel.z * kSmoothVelXZ;
         g_smoothVel.y = g_smoothVel.y * (1-kSmoothVelY)  + rawVel.y * kSmoothVelY;
         g_aimPtr      = aimPtr;
         g_target      = target;
-        g_local       = local;
         g_localPos    = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
