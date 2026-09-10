@@ -43,9 +43,8 @@ static constexpr float kBelowBiasY     = 0.015f;
 
 static constexpr float kMinDistance    = 0.5f;
 
-// ── Защита от краша ──────────────────────────────────────
+// ── Единственная защита от краша ─────────────────────────
 static constexpr uint64_t kTransitionCooldownMs = 500;
-static constexpr int      kWorkerSleepUs        = 250;   // ~4000 Гц — быстро, но не миллионы
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -81,38 +80,29 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — пишет постоянно, но с полной защитой от краша
+//  WORKER — максимально быстрая запись, без блокирующих проверок
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
-        // 1) Разрешение на работу
-        if (!g_matchReady.load(std::memory_order_acquire)) {
-            std::this_thread::sleep_for(std::chrono::microseconds(1000));
-            continue;
-        }
-
-        // 2) Кулдаун после смены матча (Unity успевает доделать GC)
+        // Кулдаун после смены матча — единственная защита
         uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
         if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
 
-        // 3) Есть данные?
         if (!g_hasData.load(std::memory_order_acquire)) {
-            std::this_thread::sleep_for(std::chrono::microseconds(1000));
+            std::this_thread::yield();
             continue;
         }
 
-        // 4) Снимок
-        uint64_t h, local;
+        uint64_t h;
         Vector3 tPos, tVel, tAcc, lPos;
         float   extraY;
         bool    airborne;
         {
             std::lock_guard<std::mutex> lk(g_lock);
             h        = g_aimPtr;
-            local    = g_localPlayer;
             tPos     = g_tPos;
             tVel     = g_tVel;
             tAcc     = g_tAccel;
@@ -120,21 +110,8 @@ static void SilentWorker() {
             extraY   = g_extraY;
             airborne = g_tAirborne;
         }
-        if (!validPtr(h) || !validPtr(local)) {
-            std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
-            continue;
-        }
+        if (!validPtr(h)) continue;
 
-        // 5) ЗАЩИТА ОТ КРАША: перечитываем aimPtr из живого local.
-        //    Если игра освободила LastAimInfo или переиспользовала адрес —
-        //    увидим несовпадение и не будем писать в мусор.
-        uint64_t liveAimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-        if (liveAimPtr != h) {
-            std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
-            continue;
-        }
-
-        // 6) Origin как есть из игры
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
 
@@ -142,10 +119,7 @@ static void SilentWorker() {
         float dyT = tPos.y - origin.y;
         float dzT = tPos.z - origin.z;
         float dist = std::sqrt(dxT*dxT + dyT*dyT + dzT*dzT);
-        if (dist < kMinDistance) {
-            std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
-            continue;
-        }
+        if (dist < kMinDistance) continue;
 
         float t = dist / kBulletSpeed + kServerLag;
         if (t < kLeadMin) t = kLeadMin;
@@ -164,18 +138,7 @@ static void SilentWorker() {
             predZ - origin.z
         };
 
-        // 7) Финальная валидация: если между расчётом и записью
-        //    main-thread сбросил — не пишем.
-        if (!g_matchReady.load(std::memory_order_acquire)) continue;
-
-        // 8) Ещё раз перечитываем aimPtr непосредственно перед записью
-        //    (защита от узкого race-окна)
-        uint64_t finalCheck = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-        if (finalCheck != h) continue;
-
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
-
-        std::this_thread::sleep_for(std::chrono::microseconds(kWorkerSleepUs));
     }
 }
 
@@ -235,7 +198,6 @@ void RunSilentAim() {
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
-        g_matchReady.store(false, std::memory_order_release);
         s_havePrevTarget = false;
         return;
     }
@@ -243,7 +205,6 @@ void RunSilentAim() {
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
-        g_matchReady.store(false, std::memory_order_release);
         s_havePrevTarget = false;
         return;
     }
@@ -252,7 +213,6 @@ void RunSilentAim() {
     Vector3 lPos = HeadPos(local);
     if (isZeroV3(tPos) || isZeroV3(lPos)) {
         g_hasData.store(false, std::memory_order_release);
-        g_matchReady.store(false, std::memory_order_release);
         return;
     }
 
@@ -317,14 +277,9 @@ void RunSilentAim() {
     }
 
     g_hasData.store(true, std::memory_order_release);
-
-    uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
-    if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-        return;
-    }
     g_matchReady.store(true, std::memory_order_release);
 
-    // Мгновенный пинг — тоже с защитой
+    // ─── Мгновенный пинг — тоже без блокирующих проверок ───
     {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
@@ -346,12 +301,7 @@ void RunSilentAim() {
                         + kHeadCenterY + extraY + gravTerm;
 
             Vector3 dir = { predX - origin.x, predY - origin.y, predZ - origin.z };
-
-            // Перечитываем aimPtr перед пингом
-            uint64_t liveAimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-            if (liveAimPtr == aimPtr) {
-                WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
-            }
+            WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
         }
     }
 }
