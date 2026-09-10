@@ -458,7 +458,8 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
 
         if (stats.inMatch) {
             CGMutablePathRef fovPath = CGPathCreateMutable();
-            BOOL hasFov = RenderFOVCirclePath(fovPath, vw, vh, ((isAimbot || aimsilent1) && isShowFov), aimFov);
+            // FOV-круг только для aimbot. Silent работает без FOV.
+            BOOL hasFov = RenderFOVCirclePath(fovPath, vw, vh, (isAimbot && isShowFov), aimFov);
             self.fovLayer.path = hasFov ? fovPath : nil;
             CGPathRelease(fovPath);
 
@@ -686,8 +687,6 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                         float dy = w2s.y - center.y;
                         score = dx * dx + dy * dy;
                     } else {
-                        // Цель сзади камеры. Скор по углу от направления взгляда,
-                        // и всегда хуже любой on-screen цели.
                         Quaternion aimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
                         Vector3 fwd = {
                             2.0f * (aimQ.x * aimQ.z + aimQ.w * aimQ.y),
