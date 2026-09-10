@@ -92,10 +92,6 @@ void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     g_lastLocal      = 0;
     g_lastTarget     = 0;
-    // ВАЖНО: g_lastMatch здесь НЕ обнуляем.
-    // Раньше это давало бесконечный цикл:
-    //   cachedMatch != 0 -> g_lastMatch = cachedMatch -> ResetSilentAim() -> g_lastMatch = 0 -> снова...
-    // из-за чего g_hasData никогда не становился true и сайлент молчал во всех матчах кроме первого.
     g_prevTargetPos  = {};
     g_targetVelocity = {};
     std::lock_guard<std::mutex> lk(g_lock);
@@ -107,15 +103,15 @@ void RunSilentAim() {
 
     // 1. Полный сброс, если функция выключена, мы в лобби или адрес матча невалиден
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
-        g_lastMatch = 0;   // явный сброс только здесь
+        g_lastMatch = 0;
         ResetSilentAim();
         return;
     }
 
-    // 2. Смена матча — сбрасываем состояние
+    // 2. Смена матча
     if (cachedMatch != g_lastMatch) {
         ResetSilentAim();
-        g_lastMatch = cachedMatch;   // ставим ПОСЛЕ сброса
+        g_lastMatch = cachedMatch;
         return;
     }
 
@@ -129,13 +125,8 @@ void RunSilentAim() {
         return;
     }
 
-    uint64_t wpn = WeaponOnHand(local);
-    if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
-        g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
-        return;
-    }
+    // УБРАНО: проверка оружия (WeaponOnHand + kWpn_CostAmmo).
+    // Возможно, она ложно блокировала silent в режимах с раундами.
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
