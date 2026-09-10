@@ -34,20 +34,15 @@ bool danthg = NO;
 bool testGhost = NO;
 bool dunhanh = NO;
 
-// ========== THÊM MỚI: 3 chức năng Memory ==========
 bool isNoReload    = NO;
 bool isVohaDan     = NO;
 bool isFastFire    = NO;
-// ==================================================
 
-// ========== THÊM MỚI: Show FOV ==========
 bool isShowFov = YES;
-// ========================================
 
 // ─── Silent Aim ──────────────────────────────
 bool aimsilent1 = NO;
 uint64_t g_SilentBestTarget = 0;
-// ==================================================
 
 // ─── Aimbot Flags ─────────────────────────────
 bool isAimbot          = NO;
@@ -73,7 +68,6 @@ float speedvalue = 1.0f;
 static uint64_t s_lastFollowCameraObj = 0;
 static bool gESPPrefsLoadedOnce = false;
 
-// Объявление сброса сайлента
 extern void ResetSilentAim();
 
 void ESPSyncFromPrefs(void) {
@@ -138,13 +132,11 @@ void ESPSyncFromPrefs(void) {
     aimSpeed = fmaxf(0.01f, fminf(aimSpeed, 1.0f));
 }
 
-// ─── Aim Lock State ───────────────────────────
 static uint64_t    gAimLockTarget         = 0;
 static int         gAimLockLostFrames     = 0;
 static const int   kAimLockMaxLostFrames  = 10;
 static const NSUInteger kMaxTextLayerPoolSize = 128;
 
-// ─── Frame Cache ──────────────────────────────
 static uint64_t cachedMatchGame  = 0;
 static uint64_t cachedCamera     = 0;
 uint64_t cachedMatch      = 0;
@@ -426,7 +418,6 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
             gESPPrefsLoadedOnce = true;
         }
 
-        // 🟢 ВАЖНО: Сброс кэша и сайлента при возвращении в лобби
         if (IsAtLobby(Moudule_Base)) {
             cachedMatchGame = 0;
             cachedMatch = 0;
@@ -652,8 +643,6 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     float    bestDistance = FLT_MAX;
 
     const float aimFovSq  = (isAimbot || aimsilent1) ? aimFov * aimFov : 0.0f;
-    const float safeDist  = fmaxf(aimDistance, 1.0f);
-    const float safeFovSq = fmaxf(aimFovSq, 1.0f);
     const uint64_t base   = entriesArr + kIl2CppArrayItems;
 
     for (int i = 0; i < slotCap; i++) {
@@ -694,18 +683,8 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                     float dSq = dx * dx + dy * dy;
 
                     if (dSq <= aimFovSq) {
-                        float cn = dSq / safeFovSq;
-                        float dn = dis  / safeDist;
-                        float score;
-
-                        if (aimTargetMode == 0)
-                            score = cn * 0.85f + dn * 0.15f;
-                        else if (aimTargetMode == 1)
-                            score = fminf((float)hp / 200.0f, 1.5f) * 0.65f + cn * 0.25f + dn * 0.10f;
-                        else
-                            score = dn * 0.75f + cn * 0.25f;
-
-                        if (pawn == gAimLockTarget) score *= 0.80f;
+                        // УБРАН ИСКУССТВЕННЫЙ ПРИОРИТЕТ: берем просто ближайшего к перекрестью прицела (минимальный dSq)
+                        float score = dSq;
 
                         if (score < bestScore) {
                             bestScore    = score;
