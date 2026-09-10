@@ -17,7 +17,9 @@ static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
 // ═══════════════════════════════════════════════════════════════
-//  ПАРАМЕТРЫ — только на точность хедшота, без компромиссов
+//  ПАРАМЕТРЫ (калибровано по bind-pose bone_Head из T-pose)
+//  bind-pose Neck→Head = 0.0448 (male) / 0.0390 (female)
+//  + радиус черепа сверху = центр головы
 // ═══════════════════════════════════════════════════════════════
 
 // ── Предсказание движения ─────────────────────────────────
@@ -31,11 +33,11 @@ static constexpr float kSmoothXZ      = 0.60f;
 static constexpr float kSmoothY       = 0.85f;
 static constexpr float kMaxVel        = 25.0f;
 
-// ── Захват центра головы ─────────────────────────────────
-static constexpr float kHeadCenterY   = 0.000f;   // 0 = точно в центр головы
-static constexpr float kAirborneExtra = 0.008f;   // доп. Y в прыжке врага
-static constexpr float kCrouchExtra   = 0.005f;
-static constexpr float kBelowBias     = 0.008f;
+// ── Захват головы (по данным bind-pose из JSON) ──────────
+static constexpr float kHeadCenterY   = 0.090f;   // Neck→Head + радиус черепа
+static constexpr float kAirborneExtra = 0.020f;   // доп. лифт в прыжке врага
+static constexpr float kCrouchExtra   = 0.012f;   // доп. лифт при приседе
+static constexpr float kBelowBias     = 0.015f;   // стрельба снизу вверх
 
 // ── Границы ───────────────────────────────────────────────
 static constexpr float kMinDistance   = 0.5f;
@@ -67,7 +69,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — пишет направление без остановки
+//  WORKER — постоянно пишет направление, выигрывая гонку с игрой
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -233,7 +235,7 @@ void RunSilentAim() {
     s_prevLocalPos = lPos;
     s_havePrevLocal = true;
 
-    // ─── Контекстные бонусы ────────────────────────────
+    // ─── Контекстные бонусы (прыжок/присед/высота) ─────
     float extraY = 0.0f;
     if (s_havePrevTarget) {
         if (newTVel.y >  0.4f) extraY += kAirborneExtra;
@@ -259,7 +261,7 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // ─── Мгновенный пинг ───────────────────────────────
+    // ─── Мгновенный пинг (первый выстрел ловит свежие данные) ─
     {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
