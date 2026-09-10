@@ -17,16 +17,29 @@ static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
 // ═══════════════════════════════════════════════════════════════
-//  ПАРАМЕТРЫ ПРЕДСКАЗАНИЯ
+//  ПАРАМЕТРЫ — только на точность хедшота, без компромиссов
 // ═══════════════════════════════════════════════════════════════
-static constexpr float kLeadSec        = 0.045f;  // горизонталь
-static constexpr float kLeadSecVert    = 0.085f;  // вертикаль (прыжок/присед — быстрее)
-static constexpr float kVelSmoothXZ    = 0.55f;   // EMA X/Z
-static constexpr float kVelSmoothY     = 0.85f;   // EMA Y — реакция почти мгновенная
-static constexpr float kMaxVel         = 25.0f;
-static constexpr float kHeadTopBias    = 0.055f;  // смещение к верхней части черепа
-static constexpr float kAirborneExtra  = 0.030f;  // доп. лид в воздухе по Y
-static constexpr float kCrouchExtra    = 0.020f;  // доп. лид при приседе по Y
+
+// ── Предсказание движения ─────────────────────────────────
+static constexpr float kLeadBase      = 0.035f;
+static constexpr float kLeadPerMeter  = 0.0006f;
+static constexpr float kLeadVertMult  = 1.10f;
+static constexpr float kLeadMax       = 0.070f;
+
+// ── Сглаживание (XZ плавно, Y почти мгновенно) ────────────
+static constexpr float kSmoothXZ      = 0.60f;
+static constexpr float kSmoothY       = 0.85f;
+static constexpr float kMaxVel        = 25.0f;
+
+// ── Захват центра головы ─────────────────────────────────
+static constexpr float kHeadCenterY   = 0.000f;   // 0 = точно в центр головы
+static constexpr float kAirborneExtra = 0.008f;   // доп. Y в прыжке врага
+static constexpr float kCrouchExtra   = 0.005f;
+static constexpr float kBelowBias     = 0.008f;
+
+// ── Границы ───────────────────────────────────────────────
+static constexpr float kMinDistance   = 0.5f;
+static constexpr float kMinLenSq      = 0.0001f;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -37,7 +50,7 @@ static Vector3  g_tPos   = {};
 static Vector3  g_tVel   = {};
 static Vector3  g_lPos   = {};
 static Vector3  g_lVel   = {};
-static float    g_tExtraY = 0.0f;   // динамический вертикальный бонус
+static float    g_extraY = 0.0f;
 
 static uint64_t g_lastMatch = 0;
 
@@ -54,7 +67,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — считает направление с полным предсказанием
+//  WORKER — пишет направление без остановки
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -73,41 +86,38 @@ static void SilentWorker() {
             tVel   = g_tVel;
             lPos   = g_lPos;
             lVel   = g_lVel;
-            extraY = g_tExtraY;
+            extraY = g_extraY;
         }
         if (!validPtr(h)) continue;
 
-        // ─── Предсказание позиции головы цели ──────────────
-        Vector3 predTarget = {
-            tPos.x + tVel.x * kLeadSec,
-            tPos.y + tVel.y * kLeadSecVert + kHeadTopBias + extraY,
-            tPos.z + tVel.z * kLeadSec
-        };
-
-        // ─── Origin пули: свежий из памяти игры ────────────
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (isZeroV3(origin)) {
-            origin = {
-                lPos.x + lVel.x * kLeadSec * 0.5f,
-                lPos.y + lVel.y * kLeadSec * 0.5f,
-                lPos.z + lVel.z * kLeadSec * 0.5f
-            };
-        } else {
-            // Компенсация движения стрелка в момент прилёта
-            origin.x += lVel.x * kLeadSec * 0.6f;
-            origin.y += lVel.y * kLeadSec * 0.6f;
-            origin.z += lVel.z * kLeadSec * 0.6f;
-        }
+        if (isZeroV3(origin)) origin = lPos;
 
-        Vector3 diff = {
-            predTarget.x - origin.x,
-            predTarget.y - origin.y,
-            predTarget.z - origin.z
+        float dxT = tPos.x - origin.x;
+        float dyT = tPos.y - origin.y;
+        float dzT = tPos.z - origin.z;
+        float dist = std::sqrt(dxT*dxT + dyT*dyT + dzT*dzT);
+        if (dist < kMinDistance) continue;
+
+        float leadTotal = kLeadBase + kLeadPerMeter * dist;
+        if (leadTotal > kLeadMax) leadTotal = kLeadMax;
+        float leadVert  = leadTotal * kLeadVertMult;
+
+        Vector3 pred = {
+            tPos.x + tVel.x * leadTotal,
+            tPos.y + tVel.y * leadVert + kHeadCenterY + extraY,
+            tPos.z + tVel.z * leadTotal
         };
-        float lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-        if (lenSq <= 0.0001f) continue;
 
-        float   inv = 1.0f / std::sqrt(lenSq);
+        origin.x += lVel.x * leadTotal * 0.6f;
+        origin.y += lVel.y * leadTotal * 0.6f;
+        origin.z += lVel.z * leadTotal * 0.6f;
+
+        Vector3 diff = { pred.x - origin.x, pred.y - origin.y, pred.z - origin.z };
+        float lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
+        if (lenSq <= kMinLenSq) continue;
+
+        float inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
@@ -127,16 +137,15 @@ void ResetSilentAim() {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
         g_tVel = {}; g_lVel = {};
-        g_tExtraY = 0.0f;
+        g_extraY = 0.0f;
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — обновляет данные для воркера
+//  RunSilentAim — считает скорости цели и стрелка
 // ═══════════════════════════════════════════════════════════════
 static Vector3 s_prevTargetPos = {};
 static Vector3 s_prevLocalPos  = {};
-static float   s_prevTargetY   = 0.0f;
 static bool    s_havePrevTarget = false;
 static bool    s_havePrevLocal  = false;
 static std::chrono::steady_clock::time_point s_prevTick;
@@ -145,7 +154,6 @@ void RunSilentAim() {
     InitSilentAimThread();
 
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
-        g_lastMatch = 0;
         ResetSilentAim();
         s_havePrevTarget = false;
         s_havePrevLocal  = false;
@@ -191,7 +199,7 @@ void RunSilentAim() {
         return;
     }
 
-    // ─── Скорость цели ────────────────────────────────────
+    // ─── Скорость цели ──────────────────────────────────
     Vector3 newTVel = {0, 0, 0};
     if (s_havePrevTarget) {
         newTVel = {
@@ -208,7 +216,7 @@ void RunSilentAim() {
     s_prevTargetPos = tPos;
     s_havePrevTarget = true;
 
-    // ─── Скорость локального игрока ───────────────────────
+    // ─── Скорость стрелка ───────────────────────────────
     Vector3 newLVel = {0, 0, 0};
     if (s_havePrevLocal) {
         newLVel = {
@@ -225,56 +233,62 @@ void RunSilentAim() {
     s_prevLocalPos = lPos;
     s_havePrevLocal = true;
 
-    // ─── Детект прыжка/приседа цели по голове ─────────────
-    // Если голова резко поднялась (>+0.4 u/s) — прыжок,
-    // если резко опустилась (<-0.4 u/s) — присед.
+    // ─── Контекстные бонусы ────────────────────────────
     float extraY = 0.0f;
     if (s_havePrevTarget) {
         if (newTVel.y >  0.4f) extraY += kAirborneExtra;
         if (newTVel.y < -0.4f) extraY += kCrouchExtra;
     }
-    // Разница высот между тобой и целью (стрельба снизу/сверху)
     float heightDiff = tPos.y - lPos.y;
-    if (heightDiff > 1.5f)  extraY += 0.020f; // враг сильно выше
-    if (heightDiff < -1.5f) extraY += 0.015f; // ты сильно ниже — целься выше
+    if (heightDiff < -1.5f) extraY += kBelowBias;
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
+        g_tVel.x = g_tVel.x * (1.0f - kSmoothXZ) + newTVel.x * kSmoothXZ;
+        g_tVel.z = g_tVel.z * (1.0f - kSmoothXZ) + newTVel.z * kSmoothXZ;
+        g_tVel.y = g_tVel.y * (1.0f - kSmoothY)  + newTVel.y * kSmoothY;
 
-        // X и Z — обычное сглаживание
-        g_tVel.x = g_tVel.x * (1.0f - kVelSmoothXZ) + newTVel.x * kVelSmoothXZ;
-        g_tVel.z = g_tVel.z * (1.0f - kVelSmoothXZ) + newTVel.z * kVelSmoothXZ;
-        // Y — почти без сглаживания (реакция на прыжок/присед)
-        g_tVel.y = g_tVel.y * (1.0f - kVelSmoothY) + newTVel.y * kVelSmoothY;
+        g_lVel.x = g_lVel.x * (1.0f - kSmoothXZ) + newLVel.x * kSmoothXZ;
+        g_lVel.y = g_lVel.y * (1.0f - kSmoothY)  + newLVel.y * kSmoothY;
+        g_lVel.z = g_lVel.z * (1.0f - kSmoothXZ) + newLVel.z * kSmoothXZ;
 
-        g_lVel.x = g_lVel.x * (1.0f - kVelSmoothXZ) + newLVel.x * kVelSmoothXZ;
-        g_lVel.y = g_lVel.y * (1.0f - kVelSmoothY)  + newLVel.y * kVelSmoothY;
-        g_lVel.z = g_lVel.z * (1.0f - kVelSmoothXZ) + newLVel.z * kVelSmoothXZ;
-
-        g_tPos = tPos;
-        g_lPos = lPos;
-        g_tExtraY = extraY;
+        g_tPos   = tPos;
+        g_lPos   = lPos;
+        g_extraY = extraY;
         g_aimPtr = aimPtr;
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // ─── Мгновенный пинг (первый выстрел тоже ловит свежак) ─
-    Vector3 predTarget = {
-        g_tPos.x + g_tVel.x * kLeadSec,
-        g_tPos.y + g_tVel.y * kLeadSecVert + kHeadTopBias + extraY,
-        g_tPos.z + g_tVel.z * kLeadSec
-    };
-    Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
-    if (isZeroV3(origin)) origin = g_lPos;
-    Vector3 diff = {
-        predTarget.x - origin.x,
-        predTarget.y - origin.y,
-        predTarget.z - origin.z
-    };
-    float lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
-    if (lenSq > 0.0001f) {
-        float inv = 1.0f / std::sqrt(lenSq);
-        WriteAddr<Vector3>(aimPtr + kHit_RayDir,
-                           Vector3{diff.x*inv, diff.y*inv, diff.z*inv});
+    // ─── Мгновенный пинг ───────────────────────────────
+    {
+        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+        if (isZeroV3(origin)) origin = lPos;
+
+        float dxT = tPos.x - origin.x;
+        float dyT = tPos.y - origin.y;
+        float dzT = tPos.z - origin.z;
+        float dist = std::sqrt(dxT*dxT + dyT*dyT + dzT*dzT);
+        if (dist > kMinDistance) {
+            float leadTotal = kLeadBase + kLeadPerMeter * dist;
+            if (leadTotal > kLeadMax) leadTotal = kLeadMax;
+            float leadVert  = leadTotal * kLeadVertMult;
+
+            Vector3 pred = {
+                tPos.x + g_tVel.x * leadTotal,
+                tPos.y + g_tVel.y * leadVert + kHeadCenterY + extraY,
+                tPos.z + g_tVel.z * leadTotal
+            };
+            origin.x += g_lVel.x * leadTotal * 0.6f;
+            origin.y += g_lVel.y * leadTotal * 0.6f;
+            origin.z += g_lVel.z * leadTotal * 0.6f;
+
+            Vector3 diff = { pred.x - origin.x, pred.y - origin.y, pred.z - origin.z };
+            float lenSq = diff.x*diff.x + diff.y*diff.y + diff.z*diff.z;
+            if (lenSq > kMinLenSq) {
+                float inv = 1.0f / std::sqrt(lenSq);
+                Vector3 dir = { diff.x*inv, diff.y*inv, diff.z*inv };
+                WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+            }
+        }
     }
 }
