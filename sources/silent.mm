@@ -45,17 +45,20 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h;
+        uint64_t h, curMatch;
         Vector3  tPos, lPos, vel;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
-            vel  = g_targetVelocity;
+            h        = g_aimPtr;
+            curMatch = cachedMatch;
+            tPos     = g_tPos;
+            lPos     = g_lPos;
+            vel      = g_targetVelocity;
         }
 
-        if (!validPtr(h)) {
+        // Если матч сменился или указатель стал невалидным — сбрасываем данные в потоке
+        if (!validPtr(h) || !isVaildPtr(curMatch) || IsAtLobby(Moudule_Base)) {
+            g_hasData.store(false, std::memory_order_release);
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
@@ -107,9 +110,11 @@ void RunSilentAim() {
         return;
     }
 
+    // Жесткий сброс при изменении указателя матча (старт нового матча)
     if (cachedMatch != g_lastMatch) {
         g_lastMatch = cachedMatch;
         ResetSilentAim();
+        return;
     }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
@@ -117,24 +122,32 @@ void RunSilentAim() {
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
     uint64_t wpn = WeaponOnHand(local);
     if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
     Vector3 tPos = HeadPos(target);
     if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
