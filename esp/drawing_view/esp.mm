@@ -85,7 +85,7 @@ void ESPSyncFromPrefs(void) {
 
     Norecoil    = ESPPrefsBool(NSSENCRYPT("Norecoil"),    NO);
     isBone   =  ESPPrefsBool(NSSENCRYPT("Bone"),   NO);
-    isLine   = ESPPrefsBool(NSSENCRYPT("Line"),   NO);
+    isLine   =  ESPPrefsBool(NSSENCRYPT("Line"),   NO);
     isEspBot = ESPPrefsBool(NSSENCRYPT("EspBot"), NO);
     BackJump = ESPPrefsBool(NSSENCRYPT("BackJump"), NO);
     isAimIgnoreBot    = ESPPrefsBool(NSSENCRYPT("AimIgnoreBot"),    NO);
@@ -676,18 +676,49 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
 
             if (valid) {
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix, (float)screenVpW, (float)screenVpH, (float)vw, (float)vh);
-                if (w2s.z > 0.001f || (aimsilent1 && !isAimbot)) {
-                    bool behindCam = (w2s.z <= 0.001f);
-                    float dx = behindCam ? 0.0f : w2s.x - center.x;
-                    float dy = behindCam ? 0.0f : w2s.y - center.y;
-                    float dSq = dx * dx + dy * dy;
+                bool onScreen = (w2s.z > 0.001f);
 
-                    if (dSq <= aimFovSq) {
-                        // УБРАН ИСКУССТВЕННЫЙ ПРИОРИТЕТ: берем просто ближайшего к перекрестью прицела (минимальный dSq)
-                        float score = dSq;
+                if (aimsilent1 && !isAimbot) {
+                    // === SILENT: 360°, без FOV ===
+                    float score;
+                    if (onScreen) {
+                        float dx = w2s.x - center.x;
+                        float dy = w2s.y - center.y;
+                        score = dx * dx + dy * dy;
+                    } else {
+                        // Цель сзади камеры. Скор по углу от направления взгляда,
+                        // и всегда хуже любой on-screen цели.
+                        Quaternion aimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
+                        Vector3 fwd = {
+                            2.0f * (aimQ.x * aimQ.z + aimQ.w * aimQ.y),
+                            2.0f * (aimQ.y * aimQ.z - aimQ.w * aimQ.x),
+                            1.0f - 2.0f * (aimQ.x * aimQ.x + aimQ.y * aimQ.y)
+                        };
+                        Vector3 toT = { aimPos.x - myLoc.x, aimPos.y - myLoc.y, aimPos.z - myLoc.z };
+                        float len2 = toT.x * toT.x + toT.y * toT.y + toT.z * toT.z;
+                        if (len2 > 0.01f) {
+                            float inv = 1.0f / std::sqrt(len2);
+                            float dot = (toT.x * fwd.x + toT.y * fwd.y + toT.z * fwd.z) * inv;
+                            score = 1e9f + (1.0f - dot);
+                        } else {
+                            score = FLT_MAX;
+                        }
+                    }
 
-                        if (score < bestScore) {
-                            bestScore    = score;
+                    if (score < bestScore) {
+                        bestScore    = score;
+                        bestDistance = dis;
+                        bestTarget   = pawn;
+                        bestHeadPos  = aimPos;
+                    }
+                } else {
+                    // === AIMBOT: как было, с FOV ===
+                    if (onScreen) {
+                        float dx = w2s.x - center.x;
+                        float dy = w2s.y - center.y;
+                        float dSq = dx * dx + dy * dy;
+                        if (dSq <= aimFovSq && dSq < bestScore) {
+                            bestScore    = dSq;
                             bestDistance = dis;
                             bestTarget   = pawn;
                             bestHeadPos  = aimPos;
