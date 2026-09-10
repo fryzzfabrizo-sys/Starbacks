@@ -17,9 +17,8 @@ static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
 // ── Захват головы ─────────────────────────────────────────
-// bind-pose: neck → head ≈ 0.045, плюс смещение в центр черепа.
-// Значение калибровано в предыдущих тестах.
-static constexpr float kHeadCenterY = 0.090f;
+// Центр черепа от bone_Head (основание черепа).
+static constexpr float kHeadCenterY = 0.055f;
 
 // ── Защита от краша при смене матча ──────────────────────
 static constexpr uint64_t kTransitionCooldownMs = 500;
@@ -52,7 +51,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — просто пишет (head - origin). RAW. Без нормализации.
+//  WORKER — RAW вектор (head - origin), без нормализации
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -82,7 +81,7 @@ static void SilentWorker() {
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = localPos;
 
-        // RAW вектор от origin к центру головы. Без лида, без EMA, без нормализации.
+        // RAW вектор от origin к центру головы
         Vector3 dir = {
             headPos.x - origin.x,
             headPos.y - origin.y,
@@ -147,7 +146,7 @@ void RunSilentAim() {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
-    // Смещение в центр черепа (кость neck → цент черепа)
+    // Смещение в центр черепа
     head.y += kHeadCenterY;
 
     Vector3 lPos = HeadPos(local);
@@ -160,7 +159,7 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенный пинг — то же самое, что делает Worker
+    // Мгновенный пинг
     {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
