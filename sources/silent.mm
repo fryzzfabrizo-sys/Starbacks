@@ -3,6 +3,7 @@
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 
@@ -15,94 +16,104 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-// ТОЧНАЯ КАЛИБРОВКА:
-// kHeadCenterX: отрицательное значение сдвигает точку влево (убирает уход пуль вправо)
-// kHeadCenterY: поднимает точку выше (чтобы при прыжках и падениях не било в шею)
-static constexpr float kHeadCenterX = -0.035f; 
-static constexpr float kHeadCenterY =  0.120f; 
+static constexpr float kHeadCenterY  = 0.055f;
+static constexpr float kMaxVel       = 30.0f;
+static constexpr float kSmoothVelXZ  = 0.70f;
+static constexpr float kSmoothVelY   = 0.85f;
+static constexpr uint64_t kCooldownMs = 500;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
+static std::atomic<uint64_t> g_transitionTick{0};
 
-static uint64_t g_aimPtr   = 0;
-static uint64_t g_aimKlass = 0;
-static Vector3  g_headPos  = {};
-static Vector3  g_localPos = {};
-
+static uint64_t g_aimPtr    = 0;
+static uint64_t g_target    = 0; // для свежего HeadPos в треде
+static uint64_t g_local     = 0; // для свежего localPos в треде
+static Vector3  g_smoothVel = {};
+static Vector3  g_localPos  = {};
 static uint64_t g_lastMatch = 0;
+
+static Vector3  s_prevTargetPos  = {};
+static bool     s_havePrevTarget = false;
+static std::chrono::steady_clock::time_point s_prevTick;
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
-
 static inline bool isZeroV3(const Vector3 &v) {
     return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
 }
-
-// Быстрая нормализация вектора
-static inline Vector3 NormalizeVector(const Vector3& v) {
-    float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-    if (len < 1e-5f) return {0.0f, 0.0f, 1.0f};
-    return {v.x / len, v.y / len, v.z / len};
+static inline uint64_t nowMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
-
 static Vector3 HeadPos(uint64_t pawn) {
-    if (!validPtr(pawn)) return {};
+    if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
-    return validPtr(t) ? getPositionExt(t) : Vector3{};
-}
-
-// Расчет траектории с коррекцией под прыжки и маневры
-static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& head, const Vector3& lPos) {
-    if (!validPtr(h)) return;
-
-    uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
-    if (curKlass != klass || !validPtr(curKlass)) return;
-
-    Vector3 origin = lPos;
-    if (isZeroV3(origin)) {
-        origin = ReadAddr<Vector3>(h + kHit_StartPos);
-    }
-
-    Vector3 diff = {
-        head.x - origin.x,
-        head.y - origin.y,
-        head.z - origin.z
-    };
-
-    Vector3 dir = NormalizeVector(diff);
-    WriteAddr<Vector3>(h + kHit_RayDir, dir);
+    return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — максимальная частота опроса без задержек
+//  WORKER — читает HeadPos свежим каждую итерацию
+//  При повороте камеры origin меняется мгновенно (читается из h+0x4C)
+//  При движении цели head меняется мгновенно (читается из g_target)
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
-    while (g_started.load(std::memory_order_relaxed)) {
-        if (!g_hasData.load(std::memory_order_relaxed) || !aimsilent1 || IsAtLobby(Moudule_Base) || !validPtr(cachedMatch)) {
-            std::this_thread::yield();
+    while (true) {
+        uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
+        if (tTick != 0 && (nowMs() - tTick) < kCooldownMs) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
 
-        uint64_t h     = 0;
-        uint64_t klass = 0;
-        Vector3 headPos, localPos;
-        
+        if (!g_hasData.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+            continue;
+        }
+
+        uint64_t h, target, local;
+        Vector3  smoothVel, localPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h        = g_aimPtr;
-            klass    = g_aimKlass;
-            headPos  = g_headPos;
-            localPos = g_localPos;
+            h         = g_aimPtr;
+            target    = g_target;
+            local     = g_local;
+            smoothVel = g_smoothVel;
+            localPos  = g_localPos;
         }
-
-        if (!validPtr(h)) {
+        if (!validPtr(h) || !isVaildPtr(target)) {
             std::this_thread::yield();
             continue;
         }
 
-        ApplySilentWrite(h, klass, headPos, localPos);
+        // Свежая позиция головы каждую итерацию (важно при движении цели)
+        Vector3 head = HeadPos(target);
+        if (isZeroV3(head)) { std::this_thread::yield(); continue; }
+
+        // Читаем origin свежим (меняется при повороте камеры)
+        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        if (isZeroV3(origin)) origin = localPos;
+
+        // Distance-based lead: ближе = меньше компенсации
+        float dx = head.x - origin.x;
+        float dy = head.y - origin.y;
+        float dz = head.z - origin.z;
+        float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+        // lead = distance * 0.0006 + 0.010 (≈20m→0.022s, 50m→0.040s, 100m→0.070s)
+        float lead = dist * 0.0006f + 0.010f;
+        if (lead > 0.10f) lead = 0.10f;
+
+        Vector3 pred = {
+            head.x + smoothVel.x * lead,
+            head.y + kHeadCenterY + smoothVel.y * lead,
+            head.z + smoothVel.z * lead
+        };
+
+        Vector3 dir = { pred.x - origin.x, pred.y - origin.y, pred.z - origin.z };
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
+
+        std::this_thread::yield();
     }
 }
 
@@ -114,47 +125,54 @@ void InitSilentAimThread() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    g_lastMatch = 0;
+    g_transitionTick.store(nowMs(), std::memory_order_release);
+    g_lastMatch      = 0;
+    s_havePrevTarget = false;
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr   = 0;
-        g_aimKlass = 0;
-        g_headPos  = {};
-        g_localPos = {};
+        g_aimPtr    = 0;
+        g_target    = 0;
+        g_local     = 0;
+        g_smoothVel = {};
+        g_localPos  = {};
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  RunSilentAim — EMA скорости (60fps), всё тяжёлое здесь
+// ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
 
-    if (!aimsilent1 || IsAtLobby(Moudule_Base) || !validPtr(cachedMatch)) {
-        ResetSilentAim();
-        return;
+    if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
+        ResetSilentAim(); return;
     }
 
+    // Смена матча (работает и в реальных матчах, не только тренировке)
     if (cachedMatch != g_lastMatch) {
         ResetSilentAim();
         g_lastMatch = cachedMatch;
+        s_prevTick  = std::chrono::steady_clock::now();
         return;
     }
 
+    auto now = std::chrono::steady_clock::now();
+    float dt = std::chrono::duration<float>(now - s_prevTick).count();
+    s_prevTick = now;
+    if (dt <= 0.001f || dt > 0.25f) dt = 0.016f;
+
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
-
-    if (!validPtr(local) || !validPtr(target)) {
+    if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
+        s_havePrevTarget = false;
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
-    uint64_t klass = ReadAddr<uint64_t>(aimPtr + 0);
-    if (!validPtr(klass)) {
-        g_hasData.store(false, std::memory_order_release);
+        s_havePrevTarget = false;
         return;
     }
 
@@ -163,23 +181,36 @@ void RunSilentAim() {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
-    
-    // Возвращаем и усиливаем компенсацию:
-    // kHeadCenterX уводит пули обратно влево (компенсируя правый сдвиг)
-    // kHeadCenterY задирает точку выше, компенсируя просадку хитбокса при прыжках
-    head.x += kHeadCenterX;
-    head.y += kHeadCenterY;
 
-    Vector3 lPos = {}; 
+    // EMA скорости цели
+    Vector3 rawVel = {};
+    if (s_havePrevTarget) {
+        rawVel = {
+            (head.x - s_prevTargetPos.x) / dt,
+            (head.y - s_prevTargetPos.y) / dt,
+            (head.z - s_prevTargetPos.z) / dt
+        };
+        float lenSq = rawVel.x*rawVel.x + rawVel.y*rawVel.y + rawVel.z*rawVel.z;
+        if (lenSq > kMaxVel * kMaxVel) {
+            float inv = kMaxVel / std::sqrt(lenSq);
+            rawVel.x *= inv; rawVel.y *= inv; rawVel.z *= inv;
+        }
+    }
+    s_prevTargetPos  = head;
+    s_havePrevTarget = true;
+
+    Vector3 lPos = HeadPos(local);
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr   = aimPtr;
-        g_aimKlass = klass;
-        g_headPos  = head;
-        g_localPos = lPos;
+        // EMA обновляем под локом чтобы тред читал актуальный smoothVel
+        g_smoothVel.x = g_smoothVel.x * (1-kSmoothVelXZ) + rawVel.x * kSmoothVelXZ;
+        g_smoothVel.z = g_smoothVel.z * (1-kSmoothVelXZ) + rawVel.z * kSmoothVelXZ;
+        g_smoothVel.y = g_smoothVel.y * (1-kSmoothVelY)  + rawVel.y * kSmoothVelY;
+        g_aimPtr      = aimPtr;
+        g_target      = target;
+        g_local       = local;
+        g_localPos    = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
-
-    ApplySilentWrite(aimPtr, klass, head, lPos);
 }
