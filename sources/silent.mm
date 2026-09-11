@@ -19,25 +19,17 @@ static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr float kHeadCenterY = 0.055f;
 static constexpr uint64_t kTransitionCooldownMs = 500;
 
-// Структура для атомарного обмена данными без тяжелых мьютексов
-struct AimData {
-    uint64_t aimPtr;
-    Vector3  headPos;
-    Vector3  localPos;
-};
-
-// Используем lock-free подход через двойную буферизацию или атомарный указатель на сентинел
-static std::atomic<bool>     g_started{false};
-static std::atomic<uint64_t> g_transitionTick{0};
-static uint64_t              g_lastMatch = 0;
-
-// Атомарный контейнер для данных аима (размером 32 байта, отлично ложится в кэш-линию)
 struct SharedData {
     uint64_t aimPtr;
     float hx, hy, hz;
     float lx, ly, lz;
 };
-static std::atomic<SharedData> g_sharedData{0};
+
+static std::atomic<bool>       g_started{false};
+static std::atomic<uint64_t>   g_transitionTick{0};
+static uint64_t                g_lastMatch = 0;
+
+static std::atomic<SharedData> g_sharedData{};
 static std::atomic<bool>       g_hasData{false};
 
 static inline bool validPtr(uint64_t p) {
@@ -60,7 +52,6 @@ static Vector3 HeadPos(uint64_t pawn) {
 //  WORKER — максимальная частота без мьютексов
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
-    // Установка высокого приоритета потока, если поддерживается платформой (опционально)
     while (true) {
         uint64_t tTick = g_transitionTick.load(std::memory_order_relaxed);
         if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
@@ -79,8 +70,6 @@ static void SilentWorker() {
             continue;
         }
 
-        // Минимизируем чтение памяти: пробуем сразу писать направление, 
-        // стартовую позицию берем из кэша локальной позиции если origin пустой
         Vector3 origin = ReadAddr<Vector3>(data.aimPtr + kHit_StartPos);
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f) {
             origin = {data.lx, data.ly, data.lz};
@@ -93,9 +82,6 @@ static void SilentWorker() {
         };
 
         WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
-        
-        // Легкая пауза, чтобы не утилизировать одно ядро процессора на 100% впустую, 
-        // сохраняя при этом ультра-высокую отзывчивость (~1000+ RPS)
         std::this_thread::yield();
     }
 }
@@ -112,7 +98,7 @@ void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     g_transitionTick.store(nowMs(), std::memory_order_release);
     g_lastMatch = 0;
-    g_sharedData.store(SharedData{0}, std::memory_order_release);
+    g_sharedData.store(SharedData{}, std::memory_order_release);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -155,7 +141,6 @@ void RunSilentAim() {
     head.y += kHeadCenterY;
     Vector3 lPos = HeadPos(local);
 
-    // Атомарно обновляем данные для воркера без использования std::mutex
     SharedData newData;
     newData.aimPtr = aimPtr;
     newData.hx = head.x; newData.hy = head.y; newData.hz = head.z;
