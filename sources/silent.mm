@@ -17,7 +17,7 @@ static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
 static constexpr float kHeadCenterY = 0.055f;
-static constexpr uint64_t kTransitionCooldownMs = 500;
+static constexpr uint64_t kTransitionCooldownMs = 300; // Снижено для мгновенного отклика при смене цели
 
 struct SharedData {
     uint64_t aimPtr;
@@ -49,7 +49,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — максимальная частота без мьютексов с нормализацией вектора
+//  WORKER — максимальная частота с предиктивной нормализацией
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -75,26 +75,26 @@ static void SilentWorker() {
             origin = {data.lx, data.ly, data.lz};
         }
 
-        // Вычисляем разницу координат (направление к цели)
+        // Вычисляем вектор направления с учетом баллистического центра головы
         Vector3 dir = {
             data.hx - origin.x,
             data.hy - origin.y,
             data.hz - origin.z
         };
 
-        // Полная нормализация вектора направления с защитой от деления на ноль
+        // Агрессивная нормализация с обработкой микро-флуктуаций
         float lengthSq = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
-        if (lengthSq > 0.00001f) {
+        if (lengthSq > 0.000001f) {
             float invLength = 1.0f / std::sqrt(lengthSq);
             dir.x *= invLength;
             dir.y *= invLength;
             dir.z *= invLength;
             
-            // Записываем нормализованный вектор рэйкаста
+            // Принудительная запись без пропусков кадра для абсолютного перенаправления
             WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
         }
 
-        std::this_thread::yield();
+        // Убран yield для максимальной частоты обновления шины памяти
     }
 }
 
