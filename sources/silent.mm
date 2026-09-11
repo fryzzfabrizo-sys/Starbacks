@@ -41,33 +41,35 @@ static inline Vector3 NormalizeVector(const Vector3& v) {
     return {v.x / len, v.y / len, v.z / len};
 }
 
-// Получение стабильной позиции через AimCollider вместо дерганых костей
-static Vector3 GetColliderPosition(uint64_t pawn) {
+// Строгое получение позиции головы через kHeadNode (0x638)
+static Vector3 GetHeadPosition(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
     
-    // Читаем AimCollider_Ptr (0x6C8)
-    uint64_t aimCollider = ReadAddr<uint64_t>(pawn + kAimCollider_Ptr);
-    if (validPtr(aimCollider)) {
-        // Трансформ коллайдера или его позиция
-        uint64_t transformNode = ReadAddr<uint64_t>(aimCollider + kBodyPartTransNode);
+    // Прямой узел головы из офсетов OB54
+    uint64_t headNode = ReadAddr<uint64_t>(pawn + kHeadNode);
+    if (validPtr(headNode)) {
+        uint64_t transformNode = ReadAddr<uint64_t>(headNode + kBodyPartTransNode);
         if (validPtr(transformNode)) {
             Vector3 pos = getPositionExt(transformNode);
-            if (!isZeroV3(pos)) return pos;
+            if (!isZeroV3(pos)) {
+                // Небольшой компенсатор по высоте, чтобы при прыжках не падало в шею
+                pos.y += 0.05f; 
+                return pos;
+            }
         }
     }
     
-    // Запасной вариант, если коллайдер не прогружен — верхняя точка груди/шеи
-    uint64_t neck = ReadAddr<uint64_t>(pawn + kNeckNode);
-    if (validPtr(neck)) {
-        Vector3 neckPos = getPositionExt(neck);
-        if (!isZeroV3(neckPos)) {
-            neckPos.y += 0.15f; // Автоматический подъем в область головы
-            return neckPos;
+    // Запасной встроенный метод игры
+    uint64_t fallbackHead = getHead(pawn);
+    if (validPtr(fallbackHead)) {
+        Vector3 pos = getPositionExt(fallbackHead);
+        if (!isZeroV3(pos)) {
+            pos.y += 0.05f;
+            return pos;
         }
     }
     
-    uint64_t head = getHead(pawn);
-    return validPtr(head) ? getPositionExt(head) : Vector3{};
+    return {};
 }
 
 static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& targetPos, const Vector3& lPos) {
@@ -171,7 +173,7 @@ void RunSilentAim() {
         return;
     }
 
-    Vector3 targetPos = GetColliderPosition(target);
+    Vector3 targetPos = GetHeadPosition(target);
     if (isZeroV3(targetPos)) {
         g_hasData.store(false, std::memory_order_release);
         return;
