@@ -41,35 +41,42 @@ static inline Vector3 NormalizeVector(const Vector3& v) {
     return {v.x / len, v.y / len, v.z / len};
 }
 
-// Строгое получение позиции головы через kHeadNode (0x638)
+// Продвинутый расчет головы с учетом скорости (упреждение) и наклона при прыжках
 static Vector3 GetHeadPosition(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
     
-    // Прямой узел головы из офсетов OB54
     uint64_t headNode = ReadAddr<uint64_t>(pawn + kHeadNode);
+    Vector3 pos = {};
     if (validPtr(headNode)) {
         uint64_t transformNode = ReadAddr<uint64_t>(headNode + kBodyPartTransNode);
         if (validPtr(transformNode)) {
-            Vector3 pos = getPositionExt(transformNode);
-            if (!isZeroV3(pos)) {
-                // Небольшой компенсатор по высоте, чтобы при прыжках не падало в шею
-                pos.y += 0.05f; 
-                return pos;
-            }
+            pos = getPositionExt(transformNode);
         }
     }
     
-    // Запасной встроенный метод игры
-    uint64_t fallbackHead = getHead(pawn);
-    if (validPtr(fallbackHead)) {
-        Vector3 pos = getPositionExt(fallbackHead);
-        if (!isZeroV3(pos)) {
-            pos.y += 0.05f;
-            return pos;
+    if (isZeroV3(pos)) {
+        uint64_t fallbackHead = getHead(pawn);
+        if (validPtr(fallbackHead)) {
+            pos = getPositionExt(fallbackHead);
         }
     }
     
-    return {};
+    if (isZeroV3(pos)) return {};
+
+    // Упреждение по скорости (компенсирует отставание пуль при беге и резких маневрах)
+    uint64_t physCCT = ReadAddr<uint64_t>(pawn + kPhysCCT); // 0x200
+    if (validPtr(physCCT)) {
+        Vector3 velocity = ReadAddr<Vector3>(physCCT + kPhysCCT_Velocity); // 0x17C
+        // Коэффициент упреждения (0.07f — оптимально для сетевой задержки Free Fire)
+        pos.x += velocity.x * 0.07f;
+        pos.y += velocity.y * 0.07f;
+        pos.z += velocity.z * 0.07f;
+    }
+
+    // Компенсация наклона тела при прыжках и беге (поднимаем точку выше, чтобы не цепляло шею)
+    pos.y += 0.09f; 
+
+    return pos;
 }
 
 static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& targetPos, const Vector3& lPos) {
