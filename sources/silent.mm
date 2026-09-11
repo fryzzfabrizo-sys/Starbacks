@@ -5,6 +5,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <chrono>
 
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
@@ -58,8 +59,10 @@ static Vector3 GetPlayerVelocity(uint64_t pawn) {
 }
 
 static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& rawHead, const Vector3& lPos, const Vector3& velocity) {
+    if (!validPtr(h)) return;
+
     uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
-    if (curKlass != klass) return;
+    if (curKlass != klass || !validPtr(curKlass)) return;
 
     Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
     if (isZeroV3(origin)) {
@@ -94,25 +97,38 @@ static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& r
 
 static void SilentWorker() {
     while (g_started.load(std::memory_order_relaxed)) {
-        if (!g_hasData.load(std::memory_order_relaxed)) {
-            std::this_thread::yield();
+        if (!g_hasData.load(std::memory_order_relaxed) || !aimsilent1 || IsAtLobby(Moudule_Base) || !validPtr(cachedMatch)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
 
-        uint64_t h     = g_aimPtr;
-        uint64_t klass = g_aimKlass;
-
-        if (!validPtr(h)) continue;
-
+        uint64_t h     = 0;
+        uint64_t klass = 0;
         Vector3 headPos, localPos, targetVel;
+        
         {
             std::lock_guard<std::mutex> lk(g_lock);
+            h         = g_aimPtr;
+            klass     = g_aimKlass;
             headPos   = g_headPos;
             localPos  = g_localPos;
             targetVel = g_targetVel;
         }
 
+        if (!validPtr(h)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
+        if (curKlass != klass || !validPtr(curKlass)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+
         ApplySilentWrite(h, klass, headPos, localPos, targetVel);
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
