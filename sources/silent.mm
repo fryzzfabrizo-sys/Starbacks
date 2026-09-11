@@ -19,9 +19,18 @@ static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr float kHeadCenterY = 0.055f;
 static constexpr uint64_t kTransitionCooldownMs = 500;
 
-static std::atomic<uint64_t> g_transitionTick{0};
-static uint64_t              g_lastMatch = 0;
-static uint64_t              g_lastHandledAimPtr = 0;
+struct SharedData {
+    uint64_t aimPtr;
+    float hx, hy, hz;
+    float lx, ly, lz;
+};
+
+static std::atomic<bool>       g_started{false};
+static std::atomic<uint64_t>   g_transitionTick{0};
+static uint64_t                g_lastMatch = 0;
+
+static std::atomic<SharedData> g_sharedData{};
+static std::atomic<bool>       g_hasData{false};
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
@@ -39,16 +48,66 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  WORKER — непрерывная заливка без пропусков и без предикции
+// ═══════════════════════════════════════════════════════════════
+static void SilentWorker() {
+    while (true) {
+        uint64_t tTick = g_transitionTick.load(std::memory_order_relaxed);
+        if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+
+        if (!g_hasData.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+            continue;
+        }
+
+        SharedData data = g_sharedData.load(std::memory_order_relaxed);
+        if (!validPtr(data.aimPtr)) {
+            std::this_thread::yield();
+            continue;
+        }
+
+        Vector3 origin = ReadAddr<Vector3>(data.aimPtr + kHit_StartPos);
+        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f) {
+            origin = {data.lx, data.ly, data.lz};
+        }
+
+        // Чистый вектор без математики упреждения и без нормализации
+        Vector3 dir = {
+            data.hx - origin.x,
+            data.hy - origin.y,
+            data.hz - origin.z
+        };
+
+        WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
+        std::this_thread::yield();
+    }
+}
+
+void InitSilentAimThread() {
+    bool exp = false;
+    if (g_started.compare_exchange_strong(exp, true)) {
+        std::thread worker(SilentWorker);
+        worker.detach();
+    }
+}
+
 void ResetSilentAim() {
+    g_hasData.store(false, std::memory_order_release);
     g_transitionTick.store(nowMs(), std::memory_order_release);
     g_lastMatch = 0;
-    g_lastHandledAimPtr = 0;
+    g_sharedData.store(SharedData{}, std::memory_order_release);
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — мгновенный снапшот направления в момент выстрела
+//  RunSilentAim — непрерывное обновление данных на каждом кадре
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
+    InitSilentAimThread();
+
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
         ResetSilentAim();
         return;
@@ -60,43 +119,34 @@ void RunSilentAim() {
         return;
     }
 
-    uint64_t tTick = g_transitionTick.load(std::memory_order_relaxed);
-    if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-        return;
-    }
-
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
-        g_lastHandledAimPtr = 0;
+        g_hasData.store(false, std::memory_order_release);
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
-        g_lastHandledAimPtr = 0;
+        g_hasData.store(false, std::memory_order_release);
         return;
     }
 
-    // Если это новый выстрел/патрон — делаем моментальный снапшот без динамического трекинга врага
-    if (aimPtr != g_lastHandledAimPtr) {
-        Vector3 head = HeadPos(target);
-        if (isZeroV3(head)) return;
-
-        head.y += kHeadCenterY;
-        Vector3 lPos = HeadPos(local);
-
-        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
-        if (isZeroV3(origin)) origin = lPos;
-
-        Vector3 dir = {
-            head.x - origin.x,
-            head.y - origin.y,
-            head.z - origin.z
-        };
-
-        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
-        g_lastHandledAimPtr = aimPtr;
+    Vector3 head = HeadPos(target);
+    if (isZeroV3(head)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
     }
+
+    head.y += kHeadCenterY;
+    Vector3 lPos = HeadPos(local);
+
+    SharedData newData;
+    newData.aimPtr = aimPtr;
+    newData.hx = head.x; newData.hy = head.y; newData.hz = head.z;
+    newData.lx = lPos.x; newData.ly = lPos.y; newData.lz = lPos.z;
+
+    g_sharedData.store(newData, std::memory_order_release);
+    g_hasData.store(true, std::memory_order_release);
 }
