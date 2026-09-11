@@ -15,6 +15,12 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
+// ТОЧНАЯ КАЛИБРОВКА:
+// kHeadCenterX: отрицательное значение сдвигает точку влево (убирает уход пуль вправо)
+// kHeadCenterY: поднимает точку выше (чтобы при прыжках и падениях не било в шею)
+static constexpr float kHeadCenterX = -0.035f; 
+static constexpr float kHeadCenterY =  0.120f; 
+
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
@@ -47,14 +53,13 @@ static Vector3 HeadPos(uint64_t pawn) {
     return validPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Расчет траектории без ложного смещения по мировым осям
+// Расчет траектории с коррекцией под прыжки и маневры
 static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& head, const Vector3& lPos) {
     if (!validPtr(h)) return;
 
     uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
     if (curKlass != klass || !validPtr(curKlass)) return;
 
-    // Берем оригинальную стартовую позицию из игры, если lPos невалидна
     Vector3 origin = lPos;
     if (isZeroV3(origin)) {
         origin = ReadAddr<Vector3>(h + kHit_StartPos);
@@ -159,12 +164,12 @@ void RunSilentAim() {
         return;
     }
     
-    // Убираем жесткое мировое смещение head.x += kHeadCenterX, 
-    // так как оно смещает пули в сторону независимо от поворота камеры.
-    // Если нужно сместить точку попадания, лучше делать это через офсет кости в HeadPos.
+    // Возвращаем и усиливаем компенсацию:
+    // kHeadCenterX уводит пули обратно влево (компенсируя правый сдвиг)
+    // kHeadCenterY задирает точку выше, компенсируя просадку хитбокса при прыжках
+    head.x += kHeadCenterX;
+    head.y += kHeadCenterY;
 
-    // Оставляем lPos пустым (нули), чтобы игра сама подставляла ReadAddr<Vector3>(h + kHit_StartPos) — 
-    // это гарантирует, что луч полетит прямо из ствола/камеры оружия, а не из головы локального игрока.
     Vector3 lPos = {}; 
 
     {
