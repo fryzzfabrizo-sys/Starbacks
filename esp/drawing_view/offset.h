@@ -29,7 +29,7 @@
 #define kPlayerIDStruct         0x2D0
 #define kPlayerID               0x3A0
 #define kUserID                 0x3A0
-#define kIsClientBot            0x438
+#define kIsClientBot            0x438  // confirmed
 #define kDataPool               0x70
 #define kDataPoolInner          0x10
 #define kDataPoolEntriesBase    0x20
@@ -37,7 +37,7 @@
 #define kDataPoolValue          0x18
 #define kAimRotation            0x5AC
 #define kAimRotationAux         0x5BC
-#define kIsFiring               0x770
+#define kIsFiring               0x770  // DataPool entry index (used via get_IsFiring)
 
 #define _0x27276BC 0x708// protected AvatarManager m_AvatarManager; // 0x620 protected AvatarManager FOGJNGDMJKJ; // 0x710
 
@@ -63,7 +63,7 @@
 #define kTransformIndex         0x40
 #define kMatrixList             0x18
 #define kMatrixIndices          0x20
-#define kNickname               0x430
+#define kNickname               0x430  // confirmed
 #define kStringFirstChar        0x14
 // ─── Weapon ───────────────────────────────────
 #define _0x5BC2862 0x6E8//protected OMELKCOGCBK LPEALCPGJBL; // 0x6D8
