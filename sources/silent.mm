@@ -27,6 +27,7 @@ static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
 
 static uint64_t g_aimPtr   = 0;
+static uint64_t g_aimKlass = 0;    // ← klass pointer для проверки
 static Vector3  g_headPos  = {};
 static Vector3  g_headVel  = {};
 static Vector3  g_localPos = {};
@@ -50,7 +51,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — читаем origin из +0x4C, пишем только dir
+//  WORKER — одна запись + klass check
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -58,37 +59,40 @@ static void SilentWorker() {
 
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
-        uint64_t h;
+        uint64_t h, expectedKlass;
         Vector3 headPos, headVel, localPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h        = g_aimPtr;
-            headPos  = g_headPos;
-            headVel  = g_headVel;
-            localPos = g_localPos;
+            h             = g_aimPtr;
+            expectedKlass = g_aimKlass;
+            headPos       = g_headPos;
+            headVel       = g_headVel;
+            localPos      = g_localPos;
         }
-        if (!validPtr(h)) continue;
+        if (!validPtr(h) || expectedKlass == 0) continue;
 
-        // Origin читаем из игры — как в предыдущей версии
+        // ═══ KLASS CHECK — защита от краша ═══
+        // Первые 8 байт объекта — указатель на класс.
+        // Если игра освободила память — klass не совпадёт.
+        uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
+        if (curKlass != expectedKlass) continue;
+
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = localPos;
 
-        // Предсказание
         Vector3 pred = {
             headPos.x + headVel.x * kLeadTime,
             headPos.y + headVel.y * kLeadTime,
             headPos.z + headVel.z * kLeadTime
         };
 
-        // RAW вектор
         Vector3 dir = {
             pred.x - origin.x,
             pred.y - origin.y,
             pred.z - origin.z
         };
 
-        // Двойная запись — для Deagle
-        WriteAddr<Vector3>(h + kHit_RayDir, dir);
+        // Одна запись (без двойной — она даёт race)
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
@@ -106,6 +110,7 @@ void ResetSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
+        g_aimKlass = 0;
         g_headPos = {};
         g_headVel = {};
         g_localPos = {};
@@ -151,13 +156,19 @@ void RunSilentAim() {
         return;
     }
 
+    // ═══ Читаем klass pointer HitObjectInfo ═══
+    uint64_t klass = ReadAddr<uint64_t>(aimPtr + 0);
+    if (!validPtr(klass)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
     Vector3 head = HeadPos(target);
     if (isZeroV3(head)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
 
-    // Скорость цели
     Vector3 rawVel = {0, 0, 0};
     if (s_havePrevTarget) {
         rawVel = {
@@ -186,13 +197,17 @@ void RunSilentAim() {
         g_headVel.y = g_headVel.y * (1.0f - kSmoothVelY)  + rawVel.y * kSmoothVelY;
 
         g_aimPtr   = aimPtr;
+        g_aimKlass = klass;
         g_headPos  = head;
         g_localPos = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенный пинг — читаем origin, пишем dir
+    // Мгновенный пинг — тоже с klass check
     {
+        uint64_t curKlass = ReadAddr<uint64_t>(aimPtr + 0);
+        if (curKlass != klass) return;
+
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
 
@@ -207,7 +222,6 @@ void RunSilentAim() {
             pred.y - origin.y,
             pred.z - origin.z
         };
-        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
         WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
     }
 }
