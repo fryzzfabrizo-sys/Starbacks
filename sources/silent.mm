@@ -15,7 +15,7 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-static constexpr float kHeadCenterX = -0.0100f; // Отрицательное значение смещает точку попадания влево (регулируй при необходимости)
+static constexpr float kHeadCenterX = -0.010f; // Отрицательное значение смещает точку попадания влево (регулируй при необходимости)
 static constexpr float kHeadCenterY =  0.065f;
 
 static std::mutex        g_lock;
