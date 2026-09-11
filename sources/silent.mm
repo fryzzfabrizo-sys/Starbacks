@@ -16,11 +16,9 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
+// ── Захват головы ─────────────────────────────────────────
+// Смещение от bone_Head (основание черепа) в центр головы.
 static constexpr float kHeadCenterY = 0.055f;
-
-// ── Параметры выбора цели ────────────────────────────────
-static constexpr float kMaxTargetDist  = 200.0f;  // игнор дальше 200 м
-static constexpr float kMaxScreenDist  = 1e9f;    // без FOV-ограничения для silent
 
 // ── Защита от краша при смене матча ──────────────────────
 static constexpr uint64_t kTransitionCooldownMs = 500;
@@ -53,85 +51,13 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  УЛУЧШЕННЫЙ ВЫБОР ЦЕЛИ (по референсам C#/C++)
-//  Правила:
-//    1. Только валидные указатели
-//    2. Не тиммейт, не dead, не knocked
-//    3. HP > 0
-//    4. Дистанция ≤ kMaxTargetDist
-//    5. Ближайший к центру экрана (если W2S доступен)
-//    6. Fallback: ближайший по мировой дистанции
-// ═══════════════════════════════════════════════════════════════
-static uint64_t PickBestTarget(uint64_t match, uint64_t local, float *outDistSq) {
-    uint64_t playerDict = ReadAddr<uint64_t>(match + kMatchPlayerDict);
-    if (!isVaildPtr(playerDict)) return 0;
-
-    uint64_t entriesArr = ReadAddr<uint64_t>(playerDict + kDictEntries);
-    if (!isVaildPtr(entriesArr)) return 0;
-
-    int slotCap = ReadAddr<int>(entriesArr + kIl2CppArrayMaxLength);
-    if (slotCap <= 0 || slotCap > 256) return 0;
-
-    Vector3 lPos = HeadPos(local);
-    if (isZeroV3(lPos)) return 0;
-
-    uint64_t bestTarget   = 0;
-    float    bestScreenSq = kMaxScreenDist;
-    float    bestDistSq   = FLT_MAX;
-
-    const uint64_t base = entriesArr + kIl2CppArrayItems;
-
-    for (int i = 0; i < slotCap; i++) {
-        uint64_t ent = base + (uint64_t)kDictEntryStrideBytePlayer * (uint64_t)i;
-        if (ReadAddr<int>(ent) == 0) continue;
-
-        uint64_t pawn = ReadAddr<uint64_t>(ent + (uint64_t)kDictEntryValueOffByte);
-        if (!isVaildPtr(pawn)) continue;
-        if (pawn == local) continue;
-        if (isLocalTeamMate(local, pawn)) continue;
-
-        // HP > 0 — цель ещё жива
-        if (get_CurHP(pawn) <= 0) continue;
-
-        // Дистанция до цели
-        Vector3 pPos = HeadPos(pawn);
-        if (isZeroV3(pPos)) continue;
-        float dSq = Vector3::DistanceSq(lPos, pPos);
-        if (dSq > kMaxTargetDist * kMaxTargetDist) continue;
-
-        // Экранная дистанция до центра (если возможно)
-        float screenSq = kMaxScreenDist;
-        float *matrix = GetViewMatrix(CameraMain(match));
-        if (matrix) {
-            Vector3 w2s = WorldToScreenLayer(pPos, matrix, (float)1080, (float)1920, (float)1080, (float)1920);
-            if (w2s.z > 0.001f) {
-                float dx = w2s.x - 540.0f;   // половина ширины
-                float dy = w2s.y - 960.0f;   // половина высоты
-                screenSq = dx * dx + dy * dy;
-            }
-        }
-
-        // Приоритет: ближе к центру экрана, при равенстве — ближе по миру
-        if (screenSq < bestScreenSq - 0.01f ||
-            (std::fabs(screenSq - bestScreenSq) < 0.01f && dSq < bestDistSq)) {
-            bestScreenSq = screenSq;
-            bestDistSq   = dSq;
-            bestTarget   = pawn;
-        }
-    }
-
-    if (outDistSq) *outDistSq = bestDistSq;
-    return bestTarget;
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  WORKER — yield, никаких sleep_for
+//  WORKER — максимальная частота, без sleep
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
         uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
         if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-            std::this_thread::yield();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
 
@@ -148,14 +74,12 @@ static void SilentWorker() {
             headPos  = g_headPos;
             localPos = g_localPos;
         }
-        if (!validPtr(h)) {
-            std::this_thread::yield();
-            continue;
-        }
+        if (!validPtr(h)) continue;
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = localPos;
 
+        // RAW вектор от origin к центру головы. Без лида.
         Vector3 dir = {
             headPos.x - origin.x,
             headPos.y - origin.y,
@@ -163,8 +87,6 @@ static void SilentWorker() {
         };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
-
-        std::this_thread::yield();
     }
 }
 
@@ -187,7 +109,7 @@ void ResetSilentAim() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — выбирает лучшую цель сам, не полагается на esp.mm
+//  RunSilentAim — обновляет позицию головы, пингует
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -203,19 +125,10 @@ void RunSilentAim() {
         return;
     }
 
-    uint64_t local = getLocalPlayer(cachedMatch);
-    if (!isVaildPtr(local)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
+    uint64_t local  = getLocalPlayer(cachedMatch);
+    uint64_t target = g_SilentBestTarget;
 
-    // ═══ УЛУЧШЕННЫЙ ВЫБОР ЦЕЛИ ═══
-    // Приоритет нашему выбору. Fallback — g_SilentBestTarget из esp.mm.
-    uint64_t target = PickBestTarget(cachedMatch, local, nullptr);
-    if (!isVaildPtr(target)) {
-        target = g_SilentBestTarget;
-    }
-    if (!isVaildPtr(target)) {
+    if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
@@ -231,6 +144,8 @@ void RunSilentAim() {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
+
+    // Смещение к центру черепа
     head.y += kHeadCenterY;
 
     Vector3 lPos = HeadPos(local);
@@ -243,7 +158,7 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенный пинг
+    // Мгновенный пинг — прямо в голову без лида
     {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
