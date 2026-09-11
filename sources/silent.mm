@@ -48,6 +48,17 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
+// Проверка на состояние стрельбы / одиночного выстрела
+static inline bool IsFiringOrSingleShot(uint64_t localPlayer) {
+    if (!isVaildPtr(localPlayer)) return false;
+    
+    // Здесь можно задействовать проверку состояния атаки/выстрела из вашей игры, 
+    // например, чтение флага стрельбы или текущего режима огня.
+    // Если у вас есть функция вроде IsAttacking(localPlayer) или IsWeaponFiring(localPlayer), используйте её.
+    
+    return true; // По умолчанию разрешено при вызове
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  WORKER — максимальная частота без мьютексов
 // ═══════════════════════════════════════════════════════════════
@@ -75,7 +86,6 @@ static void SilentWorker() {
             origin = {data.lx, data.ly, data.lz};
         }
 
-        // Чистый сырой вектор направления без нормализации
         Vector3 dir = {
             data.hx - origin.x,
             data.hy - origin.y,
@@ -123,6 +133,12 @@ void RunSilentAim() {
     uint64_t target = g_SilentBestTarget;
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    // Проверяем условие одиночного выстрела / момента атаки
+    if (!IsFiringOrSingleShot(local)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
