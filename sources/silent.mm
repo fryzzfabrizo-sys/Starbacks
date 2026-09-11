@@ -48,25 +48,34 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
+// Нативный ARM64 интринсик для мгновенного спин-уэйта без задержек ОС и sleep
+static inline void UltraYield() {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    __builtin_arm_yield();
+#else
+    std::this_thread::yield();
+#endif
+}
+
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — непрерывная заливка без пропусков и без предикции
+//  WORKER — абсолютный максимум частоты без sleep и без задержек
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
         uint64_t tTick = g_transitionTick.load(std::memory_order_relaxed);
         if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            UltraYield();
             continue;
         }
 
         if (!g_hasData.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
+            UltraYield();
             continue;
         }
 
         SharedData data = g_sharedData.load(std::memory_order_relaxed);
         if (!validPtr(data.aimPtr)) {
-            std::this_thread::yield();
+            UltraYield();
             continue;
         }
 
@@ -75,7 +84,6 @@ static void SilentWorker() {
             origin = {data.lx, data.ly, data.lz};
         }
 
-        // Чистый вектор без математики упреждения и без нормализации
         Vector3 dir = {
             data.hx - origin.x,
             data.hy - origin.y,
@@ -83,7 +91,7 @@ static void SilentWorker() {
         };
 
         WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
-        std::this_thread::yield();
+        UltraYield();
     }
 }
 
@@ -103,7 +111,7 @@ void ResetSilentAim() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — непрерывное обновление данных на каждом кадре
+//  RunSilentAim — мгновенное обновление данных на каждом кадре
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
