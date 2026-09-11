@@ -4,7 +4,6 @@
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
-#include <mutex>
 #include <thread>
 
 extern uint64_t Moudule_Base;
@@ -16,14 +15,16 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-static std::mutex        g_lock;
-static std::atomic<bool> g_hasData{false};
-static std::atomic<bool> g_started{false};
+static std::atomic<bool>     g_started{false};
+static std::atomic<bool>     g_hasData{false};
 
-static uint64_t g_aimPtr   = 0;
-static uint64_t g_aimKlass = 0;
-static Vector3  g_targetPos = {};
-static Vector3  g_localPos = {};
+// Атомарное хранение указателей и векторов без тяжелых мьютексов
+static std::atomic<uint64_t> g_atomAimPtr{0};
+static std::atomic<uint64_t> g_atomAimKlass{0};
+
+static std::atomic<float>    g_atomTargetX{0.0f};
+static std::atomic<float>    g_atomTargetY{0.0f};
+static std::atomic<float>    g_atomTargetZ{0.0f};
 
 static uint64_t g_lastMatch = 0;
 
@@ -41,7 +42,6 @@ static inline Vector3 NormalizeVector(const Vector3& v) {
     return {v.x / len, v.y / len, v.z / len};
 }
 
-// Продвинутый расчет головы с учетом скорости (упреждение) и наклона при прыжках
 static Vector3 GetHeadPosition(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
     
@@ -63,33 +63,25 @@ static Vector3 GetHeadPosition(uint64_t pawn) {
     
     if (isZeroV3(pos)) return {};
 
-    // Упреждение по скорости (компенсирует отставание пуль при беге и резких маневрах)
-    uint64_t physCCT = ReadAddr<uint64_t>(pawn + kPhysCCT); // 0x200
+    uint64_t physCCT = ReadAddr<uint64_t>(pawn + kPhysCCT);
     if (validPtr(physCCT)) {
-        Vector3 velocity = ReadAddr<Vector3>(physCCT + kPhysCCT_Velocity); // 0x17C
-        // Коэффициент упреждения (0.07f — оптимально для сетевой задержки Free Fire)
+        Vector3 velocity = ReadAddr<Vector3>(physCCT + kPhysCCT_Velocity);
         pos.x += velocity.x * 0.07f;
         pos.y += velocity.y * 0.07f;
         pos.z += velocity.z * 0.07f;
     }
 
-    // Компенсация наклона тела при прыжках и беге (поднимаем точку выше, чтобы не цепляло шею)
     pos.y += 0.09f; 
-
     return pos;
 }
 
-static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& targetPos, const Vector3& lPos) {
+static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& targetPos) {
     if (!validPtr(h)) return;
 
     uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
     if (curKlass != klass || !validPtr(curKlass)) return;
 
-    Vector3 origin = lPos;
-    if (isZeroV3(origin)) {
-        origin = ReadAddr<Vector3>(h + kHit_StartPos);
-    }
-
+    Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
     Vector3 diff = {
         targetPos.x - origin.x,
         targetPos.y - origin.y,
@@ -107,24 +99,21 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h     = 0;
-        uint64_t klass = 0;
-        Vector3 tPos, localPos;
+        uint64_t h     = g_atomAimPtr.load(std::memory_order_relaxed);
+        uint64_t klass = g_atomAimKlass.load(std::memory_order_relaxed);
         
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            h        = g_aimPtr;
-            klass    = g_aimKlass;
-            tPos     = g_targetPos;
-            localPos = g_localPos;
-        }
+        Vector3 tPos = {
+            g_atomTargetX.load(std::memory_order_relaxed),
+            g_atomTargetY.load(std::memory_order_relaxed),
+            g_atomTargetZ.load(std::memory_order_relaxed)
+        };
 
         if (!validPtr(h)) {
             std::this_thread::yield();
             continue;
         }
 
-        ApplySilentWrite(h, klass, tPos, localPos);
+        ApplySilentWrite(h, klass, tPos);
     }
 }
 
@@ -137,13 +126,8 @@ void InitSilentAimThread() {
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     g_lastMatch = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr   = 0;
-        g_aimKlass = 0;
-        g_targetPos = {};
-        g_localPos = {};
-    }
+    g_atomAimPtr.store(0, std::memory_order_relaxed);
+    g_atomAimKlass.store(0, std::memory_order_relaxed);
 }
 
 void RunSilentAim() {
@@ -186,16 +170,14 @@ void RunSilentAim() {
         return;
     }
 
-    Vector3 lPos = {}; 
+    // Мгновенная атомарная запись без блокировки потоков
+    g_atomAimPtr.store(aimPtr, std::memory_order_relaxed);
+    g_atomAimKlass.store(klass, std::memory_order_relaxed);
+    g_atomTargetX.store(targetPos.x, std::memory_order_relaxed);
+    g_atomTargetY.store(targetPos.y, std::memory_order_relaxed);
+    g_atomTargetZ.store(targetPos.z, std::memory_order_relaxed);
 
-    {
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr    = aimPtr;
-        g_aimKlass  = klass;
-        g_targetPos = targetPos;
-        g_localPos  = lPos;
-    }
     g_hasData.store(true, std::memory_order_release);
 
-    ApplySilentWrite(aimPtr, klass, targetPos, lPos);
+    ApplySilentWrite(aimPtr, klass, targetPos);
 }
