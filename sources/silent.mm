@@ -14,25 +14,26 @@ extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
 // ═══════════════════════════════════════════════════════════════
-//  OFFSETS (актуальные — OB54 / iOS 1.126.1)
+//  OFFSETS (OB54 / iOS 1.126.1)
 // ═══════════════════════════════════════════════════════════════
-static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;   // LastAimInfo_Ptr (iOS)
-static constexpr uint64_t kHit_RayDir         = 0x40;    // HitObjectInfo.RayDir
-static constexpr uint64_t kHit_StartPos       = 0x4C;    // HitObjectInfo.StartPosition
-static constexpr uint64_t kHit_Scatter        = 0x5C;    // разброс в GMPGMPFNMFP (обнуляем)
-static constexpr uint64_t kWeaponCostAmmo     = 0x7B8;   // m_CostAmmo
-static constexpr uint64_t kMainCameraTransform = 0x380;  // LocalPlayer -> Camera Transform
-static constexpr uint64_t kPlayerAttributes   = 0x700;
+static constexpr uint64_t kPlayer_LastAimInfo  = 0xDC8;
+static constexpr uint64_t kHit_RayDir          = 0x40;
+static constexpr uint64_t kHit_StartPos        = 0x4C;
+static constexpr uint64_t kMainCameraTransform = 0x380;
 
-// Transform structure (Unity internal)
-static constexpr uint64_t kTransformInner      = 0x10;
-static constexpr uint64_t kTransformMatrix     = 0x38;
-static constexpr uint64_t kTransformPosition   = 0x90;   // Vector3 world position
+// Transform internal (Unity)
+static constexpr uint64_t kTransformHierarchy  = 0x10;
+static constexpr uint64_t kTransformIndex      = 0x40;
+// В hierarchy:
+static constexpr uint64_t kHierarchyPositions  = 0x18;   // Vector3* localPositions
+static constexpr uint64_t kHierarchyMatrices   = 0x38;   // Matrix4x4* worldTransforms
+static constexpr uint64_t kMatrixStride        = 0x40;   // 64 байта на Matrix4x4
+static constexpr uint64_t kMatrixPosOff        = 0x30;   // смещение позиции в матрице
 
 static constexpr float kHeadCenterY = 0.055f;
 
 // ═══════════════════════════════════════════════════════════════
-//  AIM MAGNET
+//  AIM MAGNET STATE
 // ═══════════════════════════════════════════════════════════════
 static std::atomic<bool>  g_magnetEnabled{false};
 static std::atomic<float> g_magnetStrength{0.35f};
@@ -43,7 +44,7 @@ static std::mutex s_magnetLock;
 static std::map<uint64_t, Vector3> s_basePos;
 
 // ═══════════════════════════════════════════════════════════════
-//  Защита от краша
+//  SILENT STATE
 // ═══════════════════════════════════════════════════════════════
 static constexpr uint64_t kTransitionCooldownMs = 500;
 
@@ -58,7 +59,7 @@ static uint64_t g_target   = 0;
 static Vector3  g_headPos  = {};
 static Vector3  g_localPos = {};
 
-static uint64_t g_lastMatch = 0;
+static uint64_t g_lastMatch  = 0;
 static float   *g_viewMatrix = nullptr;
 
 // ═══════════════════════════════════════════════════════════════
@@ -83,7 +84,6 @@ static inline float DotV3(const Vector3 &a, const Vector3 &b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-// Forward из ViewMatrix (M2, M6, M10 с минусом — OpenGL стиль)
 static Vector3 GetForwardFromMatrix(float *m) {
     if (!m) return {0, 0, 0};
     Vector3 f = { -m[2], -m[6], -m[10] };
@@ -93,23 +93,39 @@ static Vector3 GetForwardFromMatrix(float *m) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Transform position — правильная цепочка:
-//    transformPtr (+0x10) -> internalData (+0x38) -> positionData (+0x90)
+//  SetTransformPosition — правильная Unity-цепочка
+//  Transform +0x10 → hierarchy
+//  hierarchy +0x38 → Matrix4x4*
+//  matrix[index*0x40 + 0x30..0x38] = world position
+//  Fallback через localPositions (hierarchy +0x18)
 // ═══════════════════════════════════════════════════════════════
 static bool SetTransformPosition(uint64_t transformPtr, const Vector3 &pos) {
     if (!validPtr(transformPtr)) return false;
 
-    // +0x10 -> p3
-    uint64_t p3 = ReadAddr<uint64_t>(transformPtr + kTransformInner);
-    if (!validPtr(p3)) return false;
+    uint64_t hierarchy = ReadAddr<uint64_t>(transformPtr + kTransformHierarchy);
+    if (!validPtr(hierarchy)) return false;
 
-    // p3 + 0x38 -> internal matrix/position storage
-    uint64_t posData = ReadAddr<uint64_t>(p3 + kTransformMatrix);
-    if (!validPtr(posData)) return false;
+    int index = ReadAddr<int>(transformPtr + kTransformIndex);
+    if (index < 0 || index > 100000) return false;
 
-    // +0x90 -> Vector3 world position
-    WriteAddr<Vector3>(posData + kTransformPosition, pos);
-    return true;
+    // Вариант A: world matrices
+    uint64_t matrices = ReadAddr<uint64_t>(hierarchy + kHierarchyMatrices);
+    if (validPtr(matrices)) {
+        uint64_t mat = matrices + (uint64_t)index * kMatrixStride;
+        WriteAddr<float>(mat + kMatrixPosOff + 0, pos.x);
+        WriteAddr<float>(mat + kMatrixPosOff + 4, pos.y);
+        WriteAddr<float>(mat + kMatrixPosOff + 8, pos.z);
+        return true;
+    }
+
+    // Вариант B: localPositions
+    uint64_t positions = ReadAddr<uint64_t>(hierarchy + kHierarchyPositions);
+    if (validPtr(positions)) {
+        WriteAddr<Vector3>(positions + (uint64_t)index * 12, pos);
+        return true;
+    }
+
+    return false;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -142,7 +158,7 @@ static void UpdateMagnet(uint64_t local, uint64_t target, float *viewMatrix) {
     if (!isVaildPtr(targetHead)) return;
     Vector3 headPos = getPositionExt(targetHead);
 
-    // Distance
+    // Distance check
     float dx = headPos.x - camPos.x;
     float dy = headPos.y - camPos.y;
     float dz = headPos.z - camPos.z;
@@ -153,7 +169,7 @@ static void UpdateMagnet(uint64_t local, uint64_t target, float *viewMatrix) {
         return;
     }
 
-    // Base position (сохраняем один раз)
+    // Base position (сохраняем один раз при захвате)
     Vector3 basePos;
     {
         std::lock_guard<std::mutex> lk(s_magnetLock);
@@ -166,7 +182,7 @@ static void UpdateMagnet(uint64_t local, uint64_t target, float *viewMatrix) {
         }
     }
 
-    // Проекция
+    // Проекция basePos на forward-луч
     Vector3 toEnemy = { basePos.x - camPos.x, basePos.y - camPos.y, basePos.z - camPos.z };
     float projectedDist = DotV3(toEnemy, forward);
     if (projectedDist < 0.0f) return;
@@ -177,7 +193,7 @@ static void UpdateMagnet(uint64_t local, uint64_t target, float *viewMatrix) {
         camPos.z + forward.z * projectedDist
     };
 
-    // Lerp
+    // Lerp между текущей позицией головы и точкой на луче
     float s = g_magnetStrength.load();
     Vector3 newPos = {
         headPos.x + (targetOnRay.x - headPos.x) * s,
@@ -185,7 +201,6 @@ static void UpdateMagnet(uint64_t local, uint64_t target, float *viewMatrix) {
         headPos.z + (targetOnRay.z - headPos.z) * s
     };
 
-    // Пишем напрямую в Transform (правильная цепочка)
     SetTransformPosition(targetHead, newPos);
 }
 
@@ -200,7 +215,7 @@ static void SilentWorker() {
             continue;
         }
 
-        // ═══ AIM MAGNET ═══
+        // AIM MAGNET
         if (g_magnetEnabled.load(std::memory_order_acquire)) {
             uint64_t local, target;
             {
@@ -213,7 +228,7 @@ static void SilentWorker() {
             }
         }
 
-        // ═══ SILENT AIM ═══
+        // SILENT AIM
         if (!g_hasData.load(std::memory_order_acquire)) {
             std::this_thread::yield();
             continue;
@@ -231,11 +246,6 @@ static void SilentWorker() {
             std::this_thread::yield();
             continue;
         }
-
-        // ═══ ОБНУЛЯЕМ РАЗБРОС ПУЛИ ═══
-        // kHit_Scatter лежит в GMPGMPFNMFP, куда можно писать через ту же структуру
-        // Игнорируем если оффсет не тот — просто попытка
-        // WriteAddr<float>(h + kHit_Scatter, 0.0f);
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = localPos;
@@ -260,7 +270,7 @@ void ResetSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
-        g_local = 0;
+        g_local  = 0;
         g_target = 0;
         g_headPos = {};
         g_localPos = {};
@@ -272,11 +282,11 @@ void ResetSilentAim() {
 }
 
 // Публичное API для меню
-extern "C" void SetAimMagnet(bool e)         { g_magnetEnabled.store(e); }
-extern "C" void SetAimMagnetStrength(float s){ g_magnetStrength.store(s); }
-extern "C" void SetAimMagnetMaxDist(float d) { g_magnetMaxDist.store(d); }
-extern "C" void SetAimMagnetCamDown(float y) { g_magnetCamDown.store(y); }
-extern "C" bool GetAimMagnet()               { return g_magnetEnabled.load(); }
+extern "C" void SetAimMagnet(bool e)          { g_magnetEnabled.store(e); }
+extern "C" void SetAimMagnetStrength(float s) { g_magnetStrength.store(s); }
+extern "C" void SetAimMagnetMaxDist(float d)  { g_magnetMaxDist.store(d); }
+extern "C" void SetAimMagnetCamDown(float y)  { g_magnetCamDown.store(y); }
+extern "C" bool GetAimMagnet()                { return g_magnetEnabled.load(); }
 
 // ═══════════════════════════════════════════════════════════════
 //  RunSilentAim
@@ -309,7 +319,6 @@ void RunSilentAim() {
         return;
     }
 
-    // View matrix для магнита
     g_viewMatrix = GetViewMatrix(CameraMain(cachedMatch));
 
     Vector3 head = HeadPos(target);
