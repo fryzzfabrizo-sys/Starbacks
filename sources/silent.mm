@@ -91,8 +91,6 @@ static void SilentWorker() {
             WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
         }
 
-        // 200 микросекунд предотвращают троттлинг ядра iOS/Android при 100% нагрузке, 
-        // гарантируя бесшовную работу без пропусков пуль в очередях.
         std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
 }
@@ -151,7 +149,7 @@ void RunSilentAim() {
 
     SharedData newData;
     newData.aimPtr = aimPtr;
-    newData.hx = head.x; newData.hy = head.y; newData.hz = head.hz;
+    newData.hx = head.x; newData.hy = head.y; newData.hz = head.z;
     newData.lx = lPos.x; newData.ly = lPos.y; newData.lz = lPos.z;
 
     g_sharedData.store(newData, std::memory_order_release);
