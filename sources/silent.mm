@@ -4,8 +4,8 @@
 #include <cmath>
 #include <atomic>
 #include <chrono>
-#include <mutex>
 #include <thread>
+#include <cstring>
 
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
@@ -16,105 +16,123 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-static constexpr float kPredictionTime = 0.06f;
+// Смещение флага стрельбы или состояния оружия (нужно уточнить под конкретную версию, если отличается)
+static constexpr uint64_t kWeapon_IsFiring      = 0x58; // Пример смещения флага огня
 
-static std::mutex        g_lock;
-static std::atomic<bool> g_hasData{false};
-static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr         = 0;
-static Vector3           g_tPos           = {};
-static Vector3           g_lPos           = {};
-static Vector3           g_prevTargetPos  = {};
-static Vector3           g_targetVelocity = {};
+static constexpr float kHeadCenterY = 0.055f;
+static constexpr uint64_t kTransitionCooldownMs = 500;
 
-static uint64_t          g_lastLocal      = 0;
-static uint64_t          g_lastTarget     = 0;
-static uint64_t          g_lastMatch      = 0;
+struct SharedData {
+    uint64_t aimPtr;
+    uint64_t weaponPtr; // Указатель на оружие для отслеживания момента выстрела
+    float hx, hy, hz;
+    float lx, ly, lz;
+};
 
-static std::chrono::steady_clock::time_point g_lastTick;
-static float g_lastDt = 0.0166f;
+static std::atomic<bool>       g_started{false};
+static std::atomic<uint64_t>   g_transitionTick{0};
+static uint64_t                g_lastMatch = 0;
+
+static std::atomic<SharedData> g_sharedData{};
+static std::atomic<bool>       g_hasData{false};
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
-
+static inline bool isZeroV3(const Vector3 &v) {
+    return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
+}
+static inline uint64_t nowMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Общий помощник для записи направления. Вызывается и из воркера, и из главного потока.
-static inline void WriteRayDir(uint64_t aimPtr, const Vector3 &targetPos,
-                               const Vector3 &vel, const Vector3 &fallbackOrigin) {
-    if (!validPtr(aimPtr)) return;
-
-    Vector3 predPos = {
-        targetPos.x + vel.x * kPredictionTime,
-        targetPos.y + vel.y * kPredictionTime,
-        targetPos.z + vel.z * kPredictionTime
-    };
-
-    Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
-    if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-        origin = fallbackOrigin;
-
-    Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
-    float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-    if (lenSq <= 0.0001f) return;
-
-    float   inv = 1.0f / std::sqrt(lenSq);
-    Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
-
-    WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
-}
-
+// ═══════════════════════════════════════════════════════════════
+//  WORKER — проверка выстрела и безопасная запись нормализованного вектора
+// ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
+        uint64_t tTick = g_transitionTick.load(std::memory_order_relaxed);
+        if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+
         if (!g_hasData.load(std::memory_order_acquire)) {
             std::this_thread::yield();
             continue;
         }
 
-        uint64_t h;
-        Vector3  tPos, lPos, vel;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
-            vel  = g_targetVelocity;
-        }
-        if (!validPtr(h)) {
-            g_hasData.store(false, std::memory_order_release);
+        SharedData data = g_sharedData.load(std::memory_order_relaxed);
+        if (!validPtr(data.aimPtr)) {
+            std::this_thread::yield();
             continue;
         }
 
-        WriteRayDir(h, tPos, vel, lPos);
+        // Опционально: проверяем, идет ли процесс стрельбы, чтобы не портить каждый кадр
+        // Если такого смещения нет, можно убрать эту проверку, но с ней надежнее
+        if (validPtr(data.weaponPtr)) {
+            bool isFiring = ReadAddr<bool>(data.weaponPtr + kWeapon_IsFiring);
+            if (!isFiring) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+        }
+
+        Vector3 origin = ReadAddr<Vector3>(data.aimPtr + kHit_StartPos);
+        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f) {
+            origin = {data.lx, data.ly, data.lz};
+        }
+
+        // Вычисляем разницу
+        Vector3 diff = {
+            data.hx - origin.x,
+            data.hy - origin.y,
+            data.hz - origin.z
+        };
+
+        // Нормализация вектора (предотвращает улет пуль назад из-за неверной длины)
+        float length = std::sqrt(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
+        if (length > 0.0001f) {
+            diff.x /= length;
+            diff.y /= length;
+            diff.z /= length;
+        }
+
+        WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, diff);
+        
+        // Небольшая задержка после записи, чтобы дать игре обработать кадр выстрела
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 
 void InitSilentAimThread() {
     bool exp = false;
-    if (g_started.compare_exchange_strong(exp, true))
-        std::thread(SilentWorker).detach();
+    if (g_started.compare_exchange_strong(exp, true)) {
+        std::thread worker(SilentWorker);
+        worker.detach();
+    }
 }
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    g_lastLocal      = 0;
-    g_lastTarget     = 0;
-    g_prevTargetPos  = {};
-    g_targetVelocity = {};
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
+    g_transitionTick.store(nowMs(), std::memory_order_release);
+    g_lastMatch = 0;
+    g_sharedData.store(SharedData{}, std::memory_order_release);
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  RunSilentAim — обновление данных из основного потока
+// ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
 
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
-        g_lastMatch = 0;
         ResetSilentAim();
         return;
     }
@@ -130,68 +148,33 @@ void RunSilentAim() {
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
-    Vector3 tPos = HeadPos(target);
-    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
+    // Получаем текущее оружие игрока (зависит от вашей структуры, если есть функция получения текущего оружия)
+    // uint64_t currentWeapon = ReadAddr<uint64_t>(local + 0x...); 
+
+    Vector3 head = HeadPos(target);
+    if (isZeroV3(head)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
-    auto now = std::chrono::steady_clock::now();
-    float dt = 0.0f;
-    if (g_lastTick.time_since_epoch().count() != 0)
-        dt = std::chrono::duration<float>(now - g_lastTick).count();
-    g_lastTick = now;
+    head.y += kHeadCenterY;
+    Vector3 lPos = HeadPos(local);
 
-    if (dt <= 0.0f || dt > 0.2f) dt = g_lastDt;
-    g_lastDt = dt;
+    SharedData newData;
+    newData.aimPtr = aimPtr;
+    newData.weaponPtr = 0; // Замените на реальный указатель на оружие, если используется проверка выстрела
+    newData.hx = head.x; newData.hy = head.y; newData.hz = head.z;
+    newData.lx = lPos.x; newData.ly = lPos.y; newData.lz = lPos.z;
 
-    if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
-        Vector3 delta = {
-            tPos.x - g_prevTargetPos.x,
-            tPos.y - g_prevTargetPos.y,
-            tPos.z - g_prevTargetPos.z
-        };
-        float distSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-        if (distSq < 25.0f) {
-            g_targetVelocity = { delta.x / dt, delta.y / dt, delta.z / dt };
-        } else {
-            g_targetVelocity = {0.0f, 0.0f, 0.0f};
-        }
-    } else {
-        g_targetVelocity = {0.0f, 0.0f, 0.0f};
-    }
-    g_prevTargetPos = tPos;
-
-    tPos.y += 0.05f;
-
-    Vector3 localHead = HeadPos(local);
-
-    Vector3 vel = g_targetVelocity;
-    {
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_tPos   = tPos;
-        g_lPos   = localHead;
-    }
+    g_sharedData.store(newData, std::memory_order_release);
     g_hasData.store(true, std::memory_order_release);
-
-    // Прямая запись RayDir с ГЛАВНОГО потока в тот же кадр, где ESP обновил цель.
-    // Воркер продолжает писать параллельно, это лишь увеличивает шанс попасть
-    // в окно между «игровой поток читает RayDir» и «игровой поток пишет RayDir».
-    WriteRayDir(aimPtr, tPos, vel, localHead);
 }
