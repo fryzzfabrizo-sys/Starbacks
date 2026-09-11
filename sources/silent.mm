@@ -15,68 +15,64 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
-static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
+
+static constexpr float kHeadCenterY = 0.055f;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr         = 0;
-static Vector3           g_tPos           = {};
-static Vector3           g_lPos           = {};
-static Vector3           g_prevTargetPos  = {};
-static Vector3           g_targetVelocity = {};
 
-static uint64_t          g_lastLocal      = 0;
-static uint64_t          g_lastTarget     = 0;
-static uint64_t          g_lastMatch      = 0;
+static uint64_t g_aimPtr   = 0;
+static uint64_t g_aimKlass = 0;
+static Vector3  g_headPos  = {};
+static Vector3  g_localPos = {};
+
+static uint64_t g_lastMatch = 0;
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
-
+static inline bool isZeroV3(const Vector3 &v) {
+    return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
+}
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  WORKER — только быстрая запись
+//  Мгновенный снимок (без lock) → klass check → write
+// ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
-        if (!g_hasData.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-            continue;
-        }
+        std::this_thread::yield();
 
-        uint64_t h;
-        Vector3  tPos, lPos, vel;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
-            vel  = g_targetVelocity;
-        }
-        if (!validPtr(h)) {
-            g_hasData.store(false, std::memory_order_release);
-            continue;
-        }
+        if (!g_hasData.load(std::memory_order_relaxed)) continue;
 
-        Vector3 predPos = {
-            tPos.x + vel.x * 0.06f,
-            tPos.y + vel.y * 0.06f,
-            tPos.z + vel.z * 0.06f
-        };
+        // Быстрый снимок БЕЗ mutex (одна атомарная операция каждая)
+        uint64_t h     = g_aimPtr;
+        uint64_t klass = g_aimKlass;
+
+        if (!validPtr(h)) continue;
+
+        // Защита от краша
+        uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
+        if (curKlass != klass) continue;
+
+        // Быстрый снимок позиций (иногда будет слегка stale — не критично)
+        Vector3 headPos  = g_headPos;
+        Vector3 localPos = g_localPos;
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-            origin = lPos;
+        if (isZeroV3(origin)) origin = localPos;
 
-        Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
-        float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-        if (lenSq <= 0.0001f) continue;
-
-        float   inv = 1.0f / std::sqrt(lenSq);
-        Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
+        Vector3 dir = {
+            headPos.x - origin.x,
+            headPos.y - origin.y,
+            headPos.z - origin.z
+        };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
@@ -90,25 +86,27 @@ void InitSilentAimThread() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    g_lastLocal      = 0;
-    g_lastTarget     = 0;
-    g_prevTargetPos  = {};
-    g_targetVelocity = {};
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
+    g_lastMatch = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_aimPtr   = 0;
+        g_aimKlass = 0;
+        g_headPos  = {};
+        g_localPos = {};
+    }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  RunSilentAim — обновляет кэш + пишет мгновенно (пинг)
+// ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
 
-    // 1. Полный сброс, если функция выключена, мы в лобби или адрес матча невалиден
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
-        g_lastMatch = 0;
         ResetSilentAim();
         return;
     }
 
-    // 2. Смена матча
     if (cachedMatch != g_lastMatch) {
         ResetSilentAim();
         g_lastMatch = cachedMatch;
@@ -120,54 +118,52 @@ void RunSilentAim() {
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
-
-    // УБРАНО: проверка оружия (WeaponOnHand + kWpn_CostAmmo).
-    // Возможно, она ложно блокировала silent в режимах с раундами.
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
-    Vector3 tPos = HeadPos(target);
-    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
+    uint64_t klass = ReadAddr<uint64_t>(aimPtr + 0);
+    if (!validPtr(klass)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
-    if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
-        Vector3 delta = {
-            tPos.x - g_prevTargetPos.x,
-            tPos.y - g_prevTargetPos.y,
-            tPos.z - g_prevTargetPos.z
-        };
-        float distSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-        if (distSq < 25.0f) {
-            g_targetVelocity = delta;
-        } else {
-            g_targetVelocity = {0.0f, 0.0f, 0.0f};
-        }
-    } else {
-        g_targetVelocity = {0.0f, 0.0f, 0.0f};
+    Vector3 head = HeadPos(target);
+    if (isZeroV3(head)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
     }
-    g_prevTargetPos = tPos;
+    head.y += kHeadCenterY;
 
-    tPos.y += 0.05f;
+    Vector3 lPos = HeadPos(local);
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
+        g_aimPtr   = aimPtr;
+        g_aimKlass = klass;
+        g_headPos  = head;
+        g_localPos = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
+
+    // ═══ МГНОВЕННЫЙ ПИНГ — попадает в момент одиночного выстрела ═══
+    {
+        uint64_t curKlass = ReadAddr<uint64_t>(aimPtr + 0);
+        if (curKlass != klass) return;
+
+        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+        if (isZeroV3(origin)) origin = lPos;
+
+        Vector3 dir = {
+            head.x - origin.x,
+            head.y - origin.y,
+            head.z - origin.z
+        };
+        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+    }
 }
