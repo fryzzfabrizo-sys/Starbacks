@@ -48,19 +48,8 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Проверка на состояние стрельбы / одиночного выстрела
-static inline bool IsFiringOrSingleShot(uint64_t localPlayer) {
-    if (!isVaildPtr(localPlayer)) return false;
-    
-    // Здесь можно задействовать проверку состояния атаки/выстрела из вашей игры, 
-    // например, чтение флага стрельбы или текущего режима огня.
-    // Если у вас есть функция вроде IsAttacking(localPlayer) или IsWeaponFiring(localPlayer), используйте её.
-    
-    return true; // По умолчанию разрешено при вызове
-}
-
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — максимальная частота без мьютексов
+//  WORKER — моментальная запись при появлении aimPtr (для одиночных выстрелов)
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -86,6 +75,7 @@ static void SilentWorker() {
             origin = {data.lx, data.ly, data.lz};
         }
 
+        // Мгновенный расчет вектора в голову без нормализации
         Vector3 dir = {
             data.hx - origin.x,
             data.hy - origin.y,
@@ -113,7 +103,7 @@ void ResetSilentAim() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — обновление данных из основного потока
+//  RunSilentAim — мгновенный перехват момента выстрела
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -137,12 +127,7 @@ void RunSilentAim() {
         return;
     }
 
-    // Проверяем условие одиночного выстрела / момента атаки
-    if (!IsFiringOrSingleShot(local)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
+    // Для одиночных оружий (дигл) aimPtr появляется или обновляется в момент тапа/выстрела
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
@@ -165,4 +150,17 @@ void RunSilentAim() {
 
     g_sharedData.store(newData, std::memory_order_release);
     g_hasData.store(true, std::memory_order_release);
+
+    // Прямой мгновенный вызов из главного потока в момент клика для нулевой задержки пистолетов
+    {
+        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+        if (isZeroV3(origin)) origin = lPos;
+
+        Vector3 dir = {
+            head.x - origin.x,
+            head.y - origin.y,
+            head.z - origin.z
+        };
+        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+    }
 }
