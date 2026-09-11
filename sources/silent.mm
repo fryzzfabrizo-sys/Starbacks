@@ -22,12 +22,15 @@ static constexpr float kMaxVel      = 30.0f;
 static constexpr float kSmoothVelXZ = 0.70f;
 static constexpr float kSmoothVelY  = 0.85f;
 
+// Смещение origin вниз от головы (чтобы origin был в "груди", а не в черепе)
+// Это даёт более естественный угол луча — одинаково работает вверх и вниз.
+static constexpr float kOriginDownY = 0.30f;
+
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
 
 static uint64_t g_aimPtr   = 0;
-static uint64_t g_aimKlass = 0;    // ← klass pointer для проверки
 static Vector3  g_headPos  = {};
 static Vector3  g_headVel  = {};
 static Vector3  g_localPos = {};
@@ -51,7 +54,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — одна запись + klass check
+//  WORKER — пишем И origin, И direction
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -59,40 +62,42 @@ static void SilentWorker() {
 
         if (!g_hasData.load(std::memory_order_acquire)) continue;
 
-        uint64_t h, expectedKlass;
+        uint64_t h;
         Vector3 headPos, headVel, localPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h             = g_aimPtr;
-            expectedKlass = g_aimKlass;
-            headPos       = g_headPos;
-            headVel       = g_headVel;
-            localPos      = g_localPos;
+            h        = g_aimPtr;
+            headPos  = g_headPos;
+            headVel  = g_headVel;
+            localPos = g_localPos;
         }
-        if (!validPtr(h) || expectedKlass == 0) continue;
+        if (!validPtr(h)) continue;
 
-        // ═══ KLASS CHECK — защита от краша ═══
-        // Первые 8 байт объекта — указатель на класс.
-        // Если игра освободила память — klass не совпадёт.
-        uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
-        if (curKlass != expectedKlass) continue;
+        // ═══ СТАБИЛЬНЫЙ ORIGIN — голова локального игрока, чуть вниз ═══
+        Vector3 origin = {
+            localPos.x,
+            localPos.y - kOriginDownY,
+            localPos.z
+        };
 
-        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (isZeroV3(origin)) origin = localPos;
+        // Пишем origin в память — движок возьмёт его как точку старта
+        WriteAddr<Vector3>(h + kHit_StartPos, origin);
 
+        // Предсказание позиции цели
         Vector3 pred = {
             headPos.x + headVel.x * kLeadTime,
             headPos.y + headVel.y * kLeadTime,
             headPos.z + headVel.z * kLeadTime
         };
 
+        // Direction от нашего стабильного origin к предсказанной позиции
         Vector3 dir = {
             pred.x - origin.x,
             pred.y - origin.y,
             pred.z - origin.z
         };
 
-        // Одна запись (без двойной — она даёт race)
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
@@ -110,7 +115,6 @@ void ResetSilentAim() {
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = 0;
-        g_aimKlass = 0;
         g_headPos = {};
         g_headVel = {};
         g_localPos = {};
@@ -156,13 +160,6 @@ void RunSilentAim() {
         return;
     }
 
-    // ═══ Читаем klass pointer HitObjectInfo ═══
-    uint64_t klass = ReadAddr<uint64_t>(aimPtr + 0);
-    if (!validPtr(klass)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
     Vector3 head = HeadPos(target);
     if (isZeroV3(head)) {
         g_hasData.store(false, std::memory_order_release);
@@ -197,19 +194,21 @@ void RunSilentAim() {
         g_headVel.y = g_headVel.y * (1.0f - kSmoothVelY)  + rawVel.y * kSmoothVelY;
 
         g_aimPtr   = aimPtr;
-        g_aimKlass = klass;
         g_headPos  = head;
         g_localPos = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенный пинг — тоже с klass check
+    // ═══ МГНОВЕННЫЙ ПИНГ ═══
     {
-        uint64_t curKlass = ReadAddr<uint64_t>(aimPtr + 0);
-        if (curKlass != klass) return;
+        Vector3 origin = {
+            lPos.x,
+            lPos.y - kOriginDownY,
+            lPos.z
+        };
 
-        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
-        if (isZeroV3(origin)) origin = lPos;
+        // Пишем origin
+        WriteAddr<Vector3>(aimPtr + kHit_StartPos, origin);
 
         Vector3 pred = {
             head.x + g_headVel.x * kLeadTime,
@@ -222,6 +221,7 @@ void RunSilentAim() {
             pred.y - origin.y,
             pred.z - origin.z
         };
+        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
         WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
     }
 }
