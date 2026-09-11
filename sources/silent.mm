@@ -18,8 +18,8 @@ static constexpr uint64_t kHit_StartPos       = 0x4C;
 // ТОЧНАЯ КАЛИБРОВКА:
 // kHeadCenterX: отрицательное значение сдвигает точку влево (убирает уход пуль вправо)
 // kHeadCenterY: поднимает точку выше (чтобы при прыжках и падениях не било в шею)
-static constexpr float kHeadCenterX = -0.030f; 
-static constexpr float kHeadCenterY =  0.65f; 
+static constexpr float kHeadCenterX = -0.035f; 
+static constexpr float kHeadCenterY =  0.100f; 
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
