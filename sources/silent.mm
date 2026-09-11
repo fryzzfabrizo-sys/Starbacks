@@ -17,7 +17,7 @@ static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
 static constexpr float kHeadCenterY = 0.055f;
-static constexpr uint64_t kTransitionCooldownMs = 300; // Снижено для мгновенного отклика при смене цели
+static constexpr uint64_t kTransitionCooldownMs = 300;
 
 struct SharedData {
     uint64_t aimPtr;
@@ -49,7 +49,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — максимальная частота с предиктивной нормализацией
+//  WORKER — микро-пауза 200 мкс для защиты от троттлинга планировщика ОС
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -75,14 +75,12 @@ static void SilentWorker() {
             origin = {data.lx, data.ly, data.lz};
         }
 
-        // Вычисляем вектор направления с учетом баллистического центра головы
         Vector3 dir = {
             data.hx - origin.x,
             data.hy - origin.y,
             data.hz - origin.z
         };
 
-        // Агрессивная нормализация с обработкой микро-флуктуаций
         float lengthSq = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
         if (lengthSq > 0.000001f) {
             float invLength = 1.0f / std::sqrt(lengthSq);
@@ -90,11 +88,12 @@ static void SilentWorker() {
             dir.y *= invLength;
             dir.z *= invLength;
             
-            // Принудительная запись без пропусков кадра для абсолютного перенаправления
             WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
         }
 
-        // Убран yield для максимальной частоты обновления шины памяти
+        // 200 микросекунд предотвращают троттлинг ядра iOS/Android при 100% нагрузке, 
+        // гарантируя бесшовную работу без пропусков пуль в очередях.
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
 }
 
@@ -113,9 +112,6 @@ void ResetSilentAim() {
     g_sharedData.store(SharedData{}, std::memory_order_release);
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — обновление данных из основного потока
-// ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
 
@@ -155,7 +151,7 @@ void RunSilentAim() {
 
     SharedData newData;
     newData.aimPtr = aimPtr;
-    newData.hx = head.x; newData.hy = head.y; newData.hz = head.z;
+    newData.hx = head.x; newData.hy = head.y; newData.hz = head.hz;
     newData.lx = lPos.x; newData.ly = lPos.y; newData.lz = lPos.z;
 
     g_sharedData.store(newData, std::memory_order_release);
