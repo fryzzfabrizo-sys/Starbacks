@@ -15,9 +15,6 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-static constexpr float kHeadCenterX = -0.01f; // Отрицательное значение смещает точку попадания влево (регулируй при необходимости)
-static constexpr float kHeadCenterY =  0.065f;
-
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
@@ -50,13 +47,14 @@ static Vector3 HeadPos(uint64_t pawn) {
     return validPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Расчет траектории с учетом точной компенсации по горизонтали
+// Расчет траектории без ложного смещения по мировым осям
 static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& head, const Vector3& lPos) {
     if (!validPtr(h)) return;
 
     uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
     if (curKlass != klass || !validPtr(curKlass)) return;
 
+    // Берем оригинальную стартовую позицию из игры, если lPos невалидна
     Vector3 origin = lPos;
     if (isZeroV3(origin)) {
         origin = ReadAddr<Vector3>(h + kHit_StartPos);
@@ -161,11 +159,13 @@ void RunSilentAim() {
         return;
     }
     
-    // Применяем компенсацию по осям
-    head.x += kHeadCenterX;
-    head.y += kHeadCenterY;
+    // Убираем жесткое мировое смещение head.x += kHeadCenterX, 
+    // так как оно смещает пули в сторону независимо от поворота камеры.
+    // Если нужно сместить точку попадания, лучше делать это через офсет кости в HeadPos.
 
-    Vector3 lPos = HeadPos(local);
+    // Оставляем lPos пустым (нули), чтобы игра сама подставляла ReadAddr<Vector3>(h + kHit_StartPos) — 
+    // это гарантирует, что луч полетит прямо из ствола/камеры оружия, а не из головы локального игрока.
+    Vector3 lPos = {}; 
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
