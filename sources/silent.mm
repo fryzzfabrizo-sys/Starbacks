@@ -22,13 +22,9 @@ static constexpr float kMaxVel      = 30.0f;
 static constexpr float kSmoothVelXZ = 0.70f;
 static constexpr float kSmoothVelY  = 0.85f;
 
-// ── Кулдаун после смены матча — уменьшен для одиночных ──
-static constexpr uint64_t kTransitionCooldownMs = 200;
-
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static std::atomic<uint64_t> g_transitionTick{0};
 
 static uint64_t g_aimPtr   = 0;
 static Vector3  g_headPos  = {};
@@ -47,10 +43,6 @@ static inline bool validPtr(uint64_t p) {
 static inline bool isZeroV3(const Vector3 &v) {
     return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
 }
-static inline uint64_t nowMs() {
-    using namespace std::chrono;
-    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
-}
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
@@ -58,20 +50,13 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — yield без sleep
+//  WORKER — yield + двойная запись для одиночных
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
-        uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
-        if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-            std::this_thread::yield();
-            continue;
-        }
+        std::this_thread::yield();
 
-        if (!g_hasData.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-            continue;
-        }
+        if (!g_hasData.load(std::memory_order_acquire)) continue;
 
         uint64_t h;
         Vector3 headPos, headVel, localPos;
@@ -82,10 +67,7 @@ static void SilentWorker() {
             headVel  = g_headVel;
             localPos = g_localPos;
         }
-        if (!validPtr(h)) {
-            std::this_thread::yield();
-            continue;
-        }
+        if (!validPtr(h)) continue;
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         if (isZeroV3(origin)) origin = localPos;
@@ -102,8 +84,9 @@ static void SilentWorker() {
             pred.z - origin.z
         };
 
+        // Двойная запись — попадает в окно одиночного выстрела
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
-        std::this_thread::yield();
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
 
@@ -115,7 +98,6 @@ void InitSilentAimThread() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    g_transitionTick.store(nowMs(), std::memory_order_release);
     g_lastMatch = 0;
     s_havePrevTarget = false;
     {
@@ -205,7 +187,7 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенный пинг
+    // ═══ МГНОВЕННЫЙ ПИНГ — две записи, чтобы попасть в момент выстрела ═══
     {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (isZeroV3(origin)) origin = lPos;
@@ -221,6 +203,7 @@ void RunSilentAim() {
             pred.y - origin.y,
             pred.z - origin.z
         };
+        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
         WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
     }
 }
