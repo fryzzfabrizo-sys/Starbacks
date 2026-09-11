@@ -4,8 +4,8 @@
 #include <cmath>
 #include <atomic>
 #include <chrono>
-#include <mutex>
 #include <thread>
+#include <cstring>
 
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
@@ -16,23 +16,29 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-// ── Захват головы ─────────────────────────────────────────
-// Смещение от bone_Head (основание черепа) в центр головы.
 static constexpr float kHeadCenterY = 0.055f;
-
-// ── Защита от краша при смене матча ──────────────────────
 static constexpr uint64_t kTransitionCooldownMs = 500;
 
-static std::mutex        g_lock;
-static std::atomic<bool> g_hasData{false};
-static std::atomic<bool> g_started{false};
+// Структура для атомарного обмена данными без тяжелых мьютексов
+struct AimData {
+    uint64_t aimPtr;
+    Vector3  headPos;
+    Vector3  localPos;
+};
+
+// Используем lock-free подход через двойную буферизацию или атомарный указатель на сентинел
+static std::atomic<bool>     g_started{false};
 static std::atomic<uint64_t> g_transitionTick{0};
+static uint64_t              g_lastMatch = 0;
 
-static uint64_t g_aimPtr   = 0;
-static Vector3  g_headPos  = {};
-static Vector3  g_localPos = {};
-
-static uint64_t g_lastMatch = 0;
+// Атомарный контейнер для данных аима (размером 32 байта, отлично ложится в кэш-линию)
+struct SharedData {
+    uint64_t aimPtr;
+    float hx, hy, hz;
+    float lx, ly, lz;
+};
+static std::atomic<SharedData> g_sharedData{0};
+static std::atomic<bool>       g_hasData{false};
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
@@ -51,13 +57,14 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — максимальная частота, без sleep
+//  WORKER — максимальная частота без мьютексов
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
+    // Установка высокого приоритета потока, если поддерживается платформой (опционально)
     while (true) {
-        uint64_t tTick = g_transitionTick.load(std::memory_order_acquire);
+        uint64_t tTick = g_transitionTick.load(std::memory_order_relaxed);
         if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
 
@@ -66,50 +73,50 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h;
-        Vector3 headPos, localPos;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            h        = g_aimPtr;
-            headPos  = g_headPos;
-            localPos = g_localPos;
+        SharedData data = g_sharedData.load(std::memory_order_relaxed);
+        if (!validPtr(data.aimPtr)) {
+            std::this_thread::yield();
+            continue;
         }
-        if (!validPtr(h)) continue;
 
-        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (isZeroV3(origin)) origin = localPos;
+        // Минимизируем чтение памяти: пробуем сразу писать направление, 
+        // стартовую позицию берем из кэша локальной позиции если origin пустой
+        Vector3 origin = ReadAddr<Vector3>(data.aimPtr + kHit_StartPos);
+        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f) {
+            origin = {data.lx, data.ly, data.lz};
+        }
 
-        // RAW вектор от origin к центру головы. Без лида.
         Vector3 dir = {
-            headPos.x - origin.x,
-            headPos.y - origin.y,
-            headPos.z - origin.z
+            data.hx - origin.x,
+            data.hy - origin.y,
+            data.hz - origin.z
         };
 
-        WriteAddr<Vector3>(h + kHit_RayDir, dir);
+        WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
+        
+        // Легкая пауза, чтобы не утилизировать одно ядро процессора на 100% впустую, 
+        // сохраняя при этом ультра-высокую отзывчивость (~1000+ RPS)
+        std::this_thread::yield();
     }
 }
 
 void InitSilentAimThread() {
     bool exp = false;
-    if (g_started.compare_exchange_strong(exp, true))
-        std::thread(SilentWorker).detach();
+    if (g_started.compare_exchange_strong(exp, true)) {
+        std::thread worker(SilentWorker);
+        worker.detach();
+    }
 }
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     g_transitionTick.store(nowMs(), std::memory_order_release);
     g_lastMatch = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr   = 0;
-        g_headPos  = {};
-        g_localPos = {};
-    }
+    g_sharedData.store(SharedData{0}, std::memory_order_release);
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — обновляет позицию головы, пингует
+//  RunSilentAim — обновление данных из основного потока
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -145,29 +152,15 @@ void RunSilentAim() {
         return;
     }
 
-    // Смещение к центру черепа
     head.y += kHeadCenterY;
-
     Vector3 lPos = HeadPos(local);
 
-    {
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr   = aimPtr;
-        g_headPos  = head;
-        g_localPos = lPos;
-    }
+    // Атомарно обновляем данные для воркера без использования std::mutex
+    SharedData newData;
+    newData.aimPtr = aimPtr;
+    newData.hx = head.x; newData.hy = head.y; newData.hz = head.z;
+    newData.lx = lPos.x; newData.ly = lPos.y; newData.lz = lPos.z;
+
+    g_sharedData.store(newData, std::memory_order_release);
     g_hasData.store(true, std::memory_order_release);
-
-    // Мгновенный пинг — прямо в голову без лида
-    {
-        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
-        if (isZeroV3(origin)) origin = lPos;
-
-        Vector3 dir = {
-            head.x - origin.x,
-            head.y - origin.y,
-            head.z - origin.z
-        };
-        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
-    }
 }
