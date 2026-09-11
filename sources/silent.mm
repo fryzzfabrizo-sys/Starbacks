@@ -4,8 +4,8 @@
 #include <cmath>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <thread>
-#include <cstring>
 
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
@@ -16,32 +16,23 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-static constexpr float kHeadCenterY = 0.055f;
-static constexpr uint64_t kTransitionCooldownMs = 300;
+static std::mutex        g_lock;
+static std::atomic<bool> g_hasData{false};
+static std::atomic<bool> g_started{false};
+static uint64_t          g_aimPtr         = 0;
+static Vector3           g_tPos           = {};
+static Vector3           g_lPos           = {};
+static Vector3           g_prevTargetPos  = {};
+static Vector3           g_targetVelocity = {};
 
-struct SharedData {
-    uint64_t aimPtr;
-    float hx, hy, hz;
-    float lx, ly, lz;
-};
-
-static std::atomic<bool>       g_started{false};
-static std::atomic<uint64_t>   g_transitionTick{0};
-static uint64_t                g_lastMatch = 0;
-
-static std::atomic<SharedData> g_sharedData{};
-static std::atomic<bool>       g_hasData{false};
+static uint64_t          g_lastLocal  = 0;
+static uint64_t          g_lastTarget = 0;
+static uint64_t          g_lastMatch  = 0;
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
-static inline bool isZeroV3(const Vector3 &v) {
-    return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
-}
-static inline uint64_t nowMs() {
-    using namespace std::chrono;
-    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
-}
+
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
@@ -49,71 +40,73 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — микро-пауза 200 мкс для защиты от троттлинга планировщика ОС
+//  WORKER THREAD — пишет направление на максимальной скорости,
+//  чтобы выиграть гонку с игрой (игра тоже пишет в +0x40).
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
-        uint64_t tTick = g_transitionTick.load(std::memory_order_relaxed);
-        if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
-        }
-
         if (!g_hasData.load(std::memory_order_acquire)) {
             std::this_thread::yield();
             continue;
         }
 
-        SharedData data = g_sharedData.load(std::memory_order_relaxed);
-        if (!validPtr(data.aimPtr)) {
-            std::this_thread::yield();
-            continue;
+        uint64_t h;
+        Vector3  tPos, lPos, vel;
+        {
+            std::lock_guard<std::mutex> lk(g_lock);
+            h    = g_aimPtr;
+            tPos = g_tPos;
+            lPos = g_lPos;
+            vel  = g_targetVelocity;
         }
+        if (!validPtr(h)) continue;
 
-        Vector3 origin = ReadAddr<Vector3>(data.aimPtr + kHit_StartPos);
-        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f) {
-            origin = {data.lx, data.ly, data.lz};
-        }
-
-        Vector3 dir = {
-            data.hx - origin.x,
-            data.hy - origin.y,
-            data.hz - origin.z
+        // Лёгкое предсказание движения цели
+        Vector3 predPos = {
+            tPos.x + vel.x * 0.06f,
+            tPos.y + vel.y * 0.06f,
+            tPos.z + vel.z * 0.06f
         };
 
-        float lengthSq = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
-        if (lengthSq > 0.000001f) {
-            float invLength = 1.0f / std::sqrt(lengthSq);
-            dir.x *= invLength;
-            dir.y *= invLength;
-            dir.z *= invLength;
-            
-            WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
-        }
+        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+            origin = lPos;
 
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
+        float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+        if (lenSq <= 0.0001f) continue;
+
+        float   inv = 1.0f / std::sqrt(lenSq);
+        Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
+
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
 
 void InitSilentAimThread() {
     bool exp = false;
-    if (g_started.compare_exchange_strong(exp, true)) {
-        std::thread worker(SilentWorker);
-        worker.detach();
-    }
+    if (g_started.compare_exchange_strong(exp, true))
+        std::thread(SilentWorker).detach();
 }
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    g_transitionTick.store(nowMs(), std::memory_order_release);
-    g_lastMatch = 0;
-    g_sharedData.store(SharedData{}, std::memory_order_release);
+    g_lastLocal      = 0;
+    g_lastTarget     = 0;
+    g_prevTargetPos  = {};
+    g_targetVelocity = {};
+    std::lock_guard<std::mutex> lk(g_lock);
+    g_aimPtr = 0;
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  Вызывается из updateFrame (60 fps). Обновляет данные для потока.
+// ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
 
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
+        g_lastMatch = 0;
         ResetSilentAim();
         return;
     }
@@ -129,29 +122,67 @@ void RunSilentAim() {
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
-    Vector3 head = HeadPos(target);
-    if (isZeroV3(head)) {
+    Vector3 tPos = HeadPos(target);
+    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
         g_hasData.store(false, std::memory_order_release);
+        g_prevTargetPos  = {};
+        g_targetVelocity = {};
         return;
     }
 
-    head.y += kHeadCenterY;
-    Vector3 lPos = HeadPos(local);
+    // Оценка скорости цели
+    if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
+        Vector3 delta = {
+            tPos.x - g_prevTargetPos.x,
+            tPos.y - g_prevTargetPos.y,
+            tPos.z - g_prevTargetPos.z
+        };
+        float distSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+        if (distSq < 25.0f) {
+            g_targetVelocity = delta;
+        } else {
+            g_targetVelocity = {0.0f, 0.0f, 0.0f};
+        }
+    } else {
+        g_targetVelocity = {0.0f, 0.0f, 0.0f};
+    }
+    g_prevTargetPos = tPos;
 
-    SharedData newData;
-    newData.aimPtr = aimPtr;
-    newData.hx = head.x; newData.hy = head.y; newData.hz = head.z;
-    newData.lx = lPos.x; newData.ly = lPos.y; newData.lz = lPos.z;
+    tPos.y += 0.05f;
 
-    g_sharedData.store(newData, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_aimPtr = aimPtr;
+        g_tPos   = tPos;
+        g_lPos   = HeadPos(local);
+    }
     g_hasData.store(true, std::memory_order_release);
+
+    // Дополнительный мгновенный пинг (может помочь на первых кадрах)
+    // — вручную один раз, не ждём тик потока.
+    if (validPtr(aimPtr)) {
+        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+            origin = g_lPos;
+        Vector3 diff  = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
+        float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+        if (lenSq > 0.0001f) {
+            float   inv = 1.0f / std::sqrt(lenSq);
+            Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
+            WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+        }
+    }
 }
