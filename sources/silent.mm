@@ -1,5 +1,6 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
+#import "../esp/drawing_view/offset.h"
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
@@ -15,19 +16,13 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-// ТОЧНАЯ КАЛИБРОВКА:
-// kHeadCenterX: отрицательное значение сдвигает точку влево (убирает уход пуль вправо)
-// kHeadCenterY: поднимает точку выше (чтобы при прыжках и падениях не било в шею)
-static constexpr float kHeadCenterX = -0.02f; 
-static constexpr float kHeadCenterY =  0.12f; 
-
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
 
 static uint64_t g_aimPtr   = 0;
 static uint64_t g_aimKlass = 0;
-static Vector3  g_headPos  = {};
+static Vector3  g_targetPos = {};
 static Vector3  g_localPos = {};
 
 static uint64_t g_lastMatch = 0;
@@ -40,21 +35,42 @@ static inline bool isZeroV3(const Vector3 &v) {
     return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
 }
 
-// Быстрая нормализация вектора
 static inline Vector3 NormalizeVector(const Vector3& v) {
     float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
     if (len < 1e-5f) return {0.0f, 0.0f, 1.0f};
     return {v.x / len, v.y / len, v.z / len};
 }
 
-static Vector3 HeadPos(uint64_t pawn) {
+// Получение стабильной позиции через AimCollider вместо дерганых костей
+static Vector3 GetColliderPosition(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
-    uint64_t t = getHead(pawn);
-    return validPtr(t) ? getPositionExt(t) : Vector3{};
+    
+    // Читаем AimCollider_Ptr (0x6C8)
+    uint64_t aimCollider = ReadAddr<uint64_t>(pawn + kAimCollider_Ptr);
+    if (validPtr(aimCollider)) {
+        // Трансформ коллайдера или его позиция
+        uint64_t transformNode = ReadAddr<uint64_t>(aimCollider + kBodyPartTransNode);
+        if (validPtr(transformNode)) {
+            Vector3 pos = getPositionExt(transformNode);
+            if (!isZeroV3(pos)) return pos;
+        }
+    }
+    
+    // Запасной вариант, если коллайдер не прогружен — верхняя точка груди/шеи
+    uint64_t neck = ReadAddr<uint64_t>(pawn + kNeckNode);
+    if (validPtr(neck)) {
+        Vector3 neckPos = getPositionExt(neck);
+        if (!isZeroV3(neckPos)) {
+            neckPos.y += 0.15f; // Автоматический подъем в область головы
+            return neckPos;
+        }
+    }
+    
+    uint64_t head = getHead(pawn);
+    return validPtr(head) ? getPositionExt(head) : Vector3{};
 }
 
-// Расчет траектории с коррекцией под прыжки и маневры
-static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& head, const Vector3& lPos) {
+static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& targetPos, const Vector3& lPos) {
     if (!validPtr(h)) return;
 
     uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
@@ -66,18 +82,15 @@ static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& h
     }
 
     Vector3 diff = {
-        head.x - origin.x,
-        head.y - origin.y,
-        head.z - origin.z
+        targetPos.x - origin.x,
+        targetPos.y - origin.y,
+        targetPos.z - origin.z
     };
 
     Vector3 dir = NormalizeVector(diff);
     WriteAddr<Vector3>(h + kHit_RayDir, dir);
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  WORKER — максимальная частота опроса без задержек
-// ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (g_started.load(std::memory_order_relaxed)) {
         if (!g_hasData.load(std::memory_order_relaxed) || !aimsilent1 || IsAtLobby(Moudule_Base) || !validPtr(cachedMatch)) {
@@ -87,13 +100,13 @@ static void SilentWorker() {
 
         uint64_t h     = 0;
         uint64_t klass = 0;
-        Vector3 headPos, localPos;
+        Vector3 tPos, localPos;
         
         {
             std::lock_guard<std::mutex> lk(g_lock);
             h        = g_aimPtr;
             klass    = g_aimKlass;
-            headPos  = g_headPos;
+            tPos     = g_targetPos;
             localPos = g_localPos;
         }
 
@@ -102,7 +115,7 @@ static void SilentWorker() {
             continue;
         }
 
-        ApplySilentWrite(h, klass, headPos, localPos);
+        ApplySilentWrite(h, klass, tPos, localPos);
     }
 }
 
@@ -119,7 +132,7 @@ void ResetSilentAim() {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr   = 0;
         g_aimKlass = 0;
-        g_headPos  = {};
+        g_targetPos = {};
         g_localPos = {};
     }
 }
@@ -158,28 +171,22 @@ void RunSilentAim() {
         return;
     }
 
-    Vector3 head = HeadPos(target);
-    if (isZeroV3(head)) {
+    Vector3 targetPos = GetColliderPosition(target);
+    if (isZeroV3(targetPos)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
-    
-    // Возвращаем и усиливаем компенсацию:
-    // kHeadCenterX уводит пули обратно влево (компенсируя правый сдвиг)
-    // kHeadCenterY задирает точку выше, компенсируя просадку хитбокса при прыжках
-    head.x += kHeadCenterX;
-    head.y += kHeadCenterY;
 
     Vector3 lPos = {}; 
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr   = aimPtr;
-        g_aimKlass = klass;
-        g_headPos  = head;
-        g_localPos = lPos;
+        g_aimPtr    = aimPtr;
+        g_aimKlass  = klass;
+        g_targetPos = targetPos;
+        g_localPos  = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
 
-    ApplySilentWrite(aimPtr, klass, head, lPos);
+    ApplySilentWrite(aimPtr, klass, targetPos, lPos);
 }
