@@ -19,6 +19,9 @@ static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr float kHeadCenterY = 0.055f;
 static constexpr uint64_t kTransitionCooldownMs = 500;
 
+// Небольшой коэффициент упреждения (таймаут предикции в секундах) чтобы пули не отставали при беге и прыжках
+static constexpr float kLeadFactor = 0.075f; 
+
 struct SharedData {
     uint64_t aimPtr;
     float hx, hy, hz;
@@ -31,6 +34,10 @@ static uint64_t                g_lastMatch = 0;
 
 static std::atomic<SharedData> g_sharedData{};
 static std::atomic<bool>       g_hasData{false};
+
+// Переменные для отслеживания скорости цели (бег, прыжки)
+static Vector3  g_lastTargetHead = {};
+static uint64_t g_lastTargetTime = 0;
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
@@ -48,34 +55,25 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Нативный ARM64 интринсик для мгновенного спин-уэйта без задержек ОС и sleep
-static inline void UltraYield() {
-#if defined(__aarch64__) || defined(_M_ARM64)
-    __builtin_arm_yield();
-#else
-    std::this_thread::yield();
-#endif
-}
-
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — абсолютный максимум частоты без sleep и без задержек
+//  WORKER — максимальная частота без мьютексов
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
         uint64_t tTick = g_transitionTick.load(std::memory_order_relaxed);
         if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-            UltraYield();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
 
         if (!g_hasData.load(std::memory_order_acquire)) {
-            UltraYield();
+            std::this_thread::yield();
             continue;
         }
 
         SharedData data = g_sharedData.load(std::memory_order_relaxed);
         if (!validPtr(data.aimPtr)) {
-            UltraYield();
+            std::this_thread::yield();
             continue;
         }
 
@@ -91,7 +89,7 @@ static void SilentWorker() {
         };
 
         WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
-        UltraYield();
+        std::this_thread::yield();
     }
 }
 
@@ -107,11 +105,13 @@ void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     g_transitionTick.store(nowMs(), std::memory_order_release);
     g_lastMatch = 0;
+    g_lastTargetHead = {};
+    g_lastTargetTime = 0;
     g_sharedData.store(SharedData{}, std::memory_order_release);
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — мгновенное обновление данных на каждом кадре
+//  RunSilentAim — обновление данных и предикция движения/прыжков
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -147,7 +147,29 @@ void RunSilentAim() {
         return;
     }
 
+    // Расчет скорости врага для компенсации отставания при беге и прыжках
+    uint64_t currentTime = nowMs();
+    float dt = (g_lastTargetTime > 0) ? (currentTime - g_lastTargetTime) / 1000.0f : 0.016f;
+
+    Vector3 velocity = {};
+    if (dt > 0.001f && dt < 0.2f && !isZeroV3(g_lastTargetHead)) {
+        velocity = {
+            (head.x - g_lastTargetHead.x) / dt,
+            (head.y - g_lastTargetHead.y) / dt,
+            (head.z - g_lastTargetHead.z) / dt
+        };
+    }
+
+    g_lastTargetHead = head;
+    g_lastTargetTime = currentTime;
+
     head.y += kHeadCenterY;
+
+    // Добавляем упреждение по вектору скорости (компенсирует прыжки и бег без примагничивания)
+    head.x += velocity.x * kLeadFactor;
+    head.y += velocity.y * kLeadFactor;
+    head.z += velocity.z * kLeadFactor;
+
     Vector3 lPos = HeadPos(local);
 
     SharedData newData;
