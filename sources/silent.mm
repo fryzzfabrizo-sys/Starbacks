@@ -15,12 +15,10 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-// Дополнительные оффсеты для максимального сока (скорость / пивот)
-// Если в твоем проекте другие оффсеты скорости для пешки, поправь их здесь:
-static constexpr uint64_t kPawn_Velocity       = 0x140; // Пример оффсета вектора скорости игрока (Velocity)
+static constexpr uint64_t kPawn_Velocity       = 0x140;
 
 static constexpr float kHeadCenterY = 0.055f;
-static constexpr float kBulletSpeed = 1500.0f; // Условная скорость пули (если хитскан — можно поставить условные 5000.0f+)
+static constexpr float kBulletSpeed = 5000.0f; // Увеличено для минимального упреждения на хитскане
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -30,7 +28,7 @@ static uint64_t g_aimPtr   = 0;
 static uint64_t g_aimKlass = 0;
 static Vector3  g_headPos  = {};
 static Vector3  g_localPos = {};
-static Vector3  g_targetVel = {}; // Скорость цели для предикта
+static Vector3  g_targetVel = {};
 
 static uint64_t g_lastMatch = 0;
 
@@ -54,10 +52,8 @@ static Vector3 HeadPos(uint64_t pawn) {
     return validPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Получение скорости игрока для предсказания движения в прыжке/беге
 static Vector3 GetPlayerVelocity(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
-    // Безопасное чтение вектора скорости, если оффсет верен
     return ReadAddr<Vector3>(pawn + kPawn_Velocity);
 }
 
@@ -70,25 +66,22 @@ static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& r
         origin = lPos;
     }
 
-    // Расчет дистанции до цели для вычисления времени полета пули
     float dist = std::sqrt(
         std::pow(rawHead.x - origin.x, 2) +
         std::pow(rawHead.y - origin.y, 2) +
         std::pow(rawHead.z - origin.z, 2)
     );
 
-    // Время полета пули до цели
     float timeToTarget = dist / kBulletSpeed;
 
-    // Предикт (экстраполяция позиции): смещаем голову на основе скорости врага и пинга/времени полета
-    // Дополнительно компенсируем вертикаль при прыжках (гравитационный коэффициент для Y)
     Vector3 predictedHead = rawHead;
     predictedHead.x += velocity.x * timeToTarget;
-    predictedHead.y += (velocity.y * timeToTarget) - (0.5f * 9.8f * timeToTarget * timeToTarget * 0.1f); // Компенсация падения/прыжка
+    predictedHead.y += (velocity.y * timeToTarget) - (0.5f * 9.8f * timeToTarget * timeToTarget * 0.1f);
     predictedHead.z += velocity.z * timeToTarget;
 
-    predictedHead.y += kHeadCenterY; // Центрирование по хитбоксу
+    predictedHead.y += kHeadCenterY;
 
+    // Исправленный порядок вычитания (от старта к цели)
     Vector3 diff = {
         predictedHead.x - origin.x,
         predictedHead.y - origin.y,
@@ -173,6 +166,7 @@ void RunSilentAim() {
     uint64_t klass = ReadAddr<uint64_t>(aimPtr + 0);
     if (!validPtr(klass)) {
         g_hasData.store(false, std::memory_order_release);
+        return;
     }
 
     Vector3 head = HeadPos(target);
