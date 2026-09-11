@@ -15,7 +15,8 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-static constexpr float kHeadCenterY = 0.055f;
+static constexpr float kHeadCenterX = -0.015f; // Отрицательное значение смещает точку попадания влево (регулируй при необходимости)
+static constexpr float kHeadCenterY =  0.055f;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -49,14 +50,13 @@ static Vector3 HeadPos(uint64_t pawn) {
     return validPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Принудительный расчет траектории из любой точки камеры/оружия в голову цели
+// Расчет траектории с учетом точной компенсации по горизонтали
 static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& head, const Vector3& lPos) {
     if (!validPtr(h)) return;
 
     uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
     if (curKlass != klass || !validPtr(curKlass)) return;
 
-    // Принудительно используем позицию локального игрока как точку старта луча
     Vector3 origin = lPos;
     if (isZeroV3(origin)) {
         origin = ReadAddr<Vector3>(h + kHit_StartPos);
@@ -160,9 +160,11 @@ void RunSilentAim() {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
+    
+    // Применяем компенсацию по осям
+    head.x += kHeadCenterX;
     head.y += kHeadCenterY;
 
-    // Берем базовую позицию локального игрока (или его головы для старта луча)
     Vector3 lPos = HeadPos(local);
 
     {
