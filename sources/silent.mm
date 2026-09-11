@@ -15,7 +15,8 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
-static constexpr uint64_t kWpn_CostAmmo       = 0x7B8;
+
+static constexpr float kPredictionTime = 0.06f;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -30,6 +31,9 @@ static uint64_t          g_lastLocal      = 0;
 static uint64_t          g_lastTarget     = 0;
 static uint64_t          g_lastMatch      = 0;
 
+static std::chrono::steady_clock::time_point g_lastTick;
+static float g_lastDt = 0.0166f;
+
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
@@ -38,6 +42,31 @@ static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
+}
+
+// Общий помощник для записи направления. Вызывается и из воркера, и из главного потока.
+static inline void WriteRayDir(uint64_t aimPtr, const Vector3 &targetPos,
+                               const Vector3 &vel, const Vector3 &fallbackOrigin) {
+    if (!validPtr(aimPtr)) return;
+
+    Vector3 predPos = {
+        targetPos.x + vel.x * kPredictionTime,
+        targetPos.y + vel.y * kPredictionTime,
+        targetPos.z + vel.z * kPredictionTime
+    };
+
+    Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+    if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
+        origin = fallbackOrigin;
+
+    Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
+    float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+    if (lenSq <= 0.0001f) return;
+
+    float   inv = 1.0f / std::sqrt(lenSq);
+    Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
+
+    WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
 }
 
 static void SilentWorker() {
@@ -61,24 +90,7 @@ static void SilentWorker() {
             continue;
         }
 
-        Vector3 predPos = {
-            tPos.x + vel.x * 0.06f,
-            tPos.y + vel.y * 0.06f,
-            tPos.z + vel.z * 0.06f
-        };
-
-        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-            origin = lPos;
-
-        Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
-        float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-        if (lenSq <= 0.0001f) continue;
-
-        float   inv = 1.0f / std::sqrt(lenSq);
-        Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
-
-        WriteAddr<Vector3>(h + kHit_RayDir, dir);
+        WriteRayDir(h, tPos, vel, lPos);
     }
 }
 
@@ -88,50 +100,35 @@ void InitSilentAimThread() {
         std::thread(SilentWorker).detach();
 }
 
+void ResetSilentAim() {
+    g_hasData.store(false, std::memory_order_release);
+    g_lastLocal      = 0;
+    g_lastTarget     = 0;
+    g_prevTargetPos  = {};
+    g_targetVelocity = {};
+    std::lock_guard<std::mutex> lk(g_lock);
+    g_aimPtr = 0;
+}
+
 void RunSilentAim() {
     InitSilentAimThread();
 
-    // Принудительный сброс, если выключено, мы в лобби или матч сбросился
-    if (!aimsilent1 || !isVaildPtr(cachedMatch) || IsAtLobby(Moudule_Base)) {
-        g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
-        g_lastLocal      = 0;
-        g_lastTarget     = 0;
-        g_lastMatch      = 0;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            g_aimPtr = 0;
-        }
+    if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
+        g_lastMatch = 0;
+        ResetSilentAim();
+        return;
+    }
+
+    if (cachedMatch != g_lastMatch) {
+        ResetSilentAim();
+        g_lastMatch = cachedMatch;
         return;
     }
 
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
 
-    if (cachedMatch != g_lastMatch || local != g_lastLocal || target != g_lastTarget) {
-        g_lastMatch      = cachedMatch;
-        g_lastLocal      = local;
-        g_lastTarget     = target;
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
-        g_hasData.store(false, std::memory_order_release);
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            g_aimPtr = 0;
-        }
-        return;
-    }
-
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
-        g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
-        return;
-    }
-
-    uint64_t wpn = WeaponOnHand(local);
-    if (isVaildPtr(wpn) && !ReadAddr<bool>(wpn + kWpn_CostAmmo)) {
         g_hasData.store(false, std::memory_order_release);
         g_prevTargetPos  = {};
         g_targetVelocity = {};
@@ -154,6 +151,15 @@ void RunSilentAim() {
         return;
     }
 
+    auto now = std::chrono::steady_clock::now();
+    float dt = 0.0f;
+    if (g_lastTick.time_since_epoch().count() != 0)
+        dt = std::chrono::duration<float>(now - g_lastTick).count();
+    g_lastTick = now;
+
+    if (dt <= 0.0f || dt > 0.2f) dt = g_lastDt;
+    g_lastDt = dt;
+
     if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
         Vector3 delta = {
             tPos.x - g_prevTargetPos.x,
@@ -162,7 +168,7 @@ void RunSilentAim() {
         };
         float distSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
         if (distSq < 25.0f) {
-            g_targetVelocity = delta;
+            g_targetVelocity = { delta.x / dt, delta.y / dt, delta.z / dt };
         } else {
             g_targetVelocity = {0.0f, 0.0f, 0.0f};
         }
@@ -173,22 +179,19 @@ void RunSilentAim() {
 
     tPos.y += 0.05f;
 
+    Vector3 localHead = HeadPos(local);
+
+    Vector3 vel = g_targetVelocity;
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr = aimPtr;
         g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
+        g_lPos   = localHead;
     }
     g_hasData.store(true, std::memory_order_release);
-}
 
-void ResetSilentAim() {
-    g_hasData.store(false, std::memory_order_release);
-    g_lastLocal      = 0;
-    g_lastTarget     = 0;
-    g_lastMatch      = 0;
-    g_prevTargetPos  = {};
-    g_targetVelocity = {};
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
+    // Прямая запись RayDir с ГЛАВНОГО потока в тот же кадр, где ESP обновил цель.
+    // Воркер продолжает писать параллельно, это лишь увеличивает шанс попасть
+    // в окно между «игровой поток читает RayDir» и «игровой поток пишет RayDir».
+    WriteRayDir(aimPtr, tPos, vel, localHead);
 }
