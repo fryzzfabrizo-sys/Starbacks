@@ -16,15 +16,11 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-// Смещение флага стрельбы или состояния оружия (нужно уточнить под конкретную версию, если отличается)
-static constexpr uint64_t kWeapon_IsFiring      = 0x58; // Пример смещения флага огня
-
 static constexpr float kHeadCenterY = 0.055f;
 static constexpr uint64_t kTransitionCooldownMs = 500;
 
 struct SharedData {
     uint64_t aimPtr;
-    uint64_t weaponPtr; // Указатель на оружие для отслеживания момента выстрела
     float hx, hy, hz;
     float lx, ly, lz;
 };
@@ -53,13 +49,13 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — проверка выстрела и безопасная запись нормализованного вектора
+//  WORKER — максимальная частота без мьютексов с нормализацией вектора
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
         uint64_t tTick = g_transitionTick.load(std::memory_order_relaxed);
         if (tTick != 0 && (nowMs() - tTick) < kTransitionCooldownMs) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
@@ -74,40 +70,31 @@ static void SilentWorker() {
             continue;
         }
 
-        // Опционально: проверяем, идет ли процесс стрельбы, чтобы не портить каждый кадр
-        // Если такого смещения нет, можно убрать эту проверку, но с ней надежнее
-        if (validPtr(data.weaponPtr)) {
-            bool isFiring = ReadAddr<bool>(data.weaponPtr + kWeapon_IsFiring);
-            if (!isFiring) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-        }
-
         Vector3 origin = ReadAddr<Vector3>(data.aimPtr + kHit_StartPos);
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f) {
             origin = {data.lx, data.ly, data.lz};
         }
 
-        // Вычисляем разницу
-        Vector3 diff = {
+        // Вычисляем разницу координат (направление к цели)
+        Vector3 dir = {
             data.hx - origin.x,
             data.hy - origin.y,
             data.hz - origin.z
         };
 
-        // Нормализация вектора (предотвращает улет пуль назад из-за неверной длины)
-        float length = std::sqrt(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
-        if (length > 0.0001f) {
-            diff.x /= length;
-            diff.y /= length;
-            diff.z /= length;
+        // Полная нормализация вектора направления с защитой от деления на ноль
+        float lengthSq = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
+        if (lengthSq > 0.00001f) {
+            float invLength = 1.0f / std::sqrt(lengthSq);
+            dir.x *= invLength;
+            dir.y *= invLength;
+            dir.z *= invLength;
+            
+            // Записываем нормализованный вектор рэйкаста
+            WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, dir);
         }
 
-        WriteAddr<Vector3>(data.aimPtr + kHit_RayDir, diff);
-        
-        // Небольшая задержка после записи, чтобы дать игре обработать кадр выстрела
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::this_thread::yield();
     }
 }
 
@@ -157,9 +144,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Получаем текущее оружие игрока (зависит от вашей структуры, если есть функция получения текущего оружия)
-    // uint64_t currentWeapon = ReadAddr<uint64_t>(local + 0x...); 
-
     Vector3 head = HeadPos(target);
     if (isZeroV3(head)) {
         g_hasData.store(false, std::memory_order_release);
@@ -171,7 +155,6 @@ void RunSilentAim() {
 
     SharedData newData;
     newData.aimPtr = aimPtr;
-    newData.weaponPtr = 0; // Замените на реальный указатель на оружие, если используется проверка выстрела
     newData.hx = head.x; newData.hy = head.y; newData.hz = head.z;
     newData.lx = lPos.x; newData.ly = lPos.y; newData.lz = lPos.z;
 
