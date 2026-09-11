@@ -22,10 +22,6 @@ static constexpr float kMaxVel      = 30.0f;
 static constexpr float kSmoothVelXZ = 0.70f;
 static constexpr float kSmoothVelY  = 0.85f;
 
-// Смещение origin вниз от головы (чтобы origin был в "груди", а не в черепе)
-// Это даёт более естественный угол луча — одинаково работает вверх и вниз.
-static constexpr float kOriginDownY = 0.30f;
-
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
@@ -54,7 +50,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — пишем И origin, И direction
+//  WORKER — читаем origin из +0x4C, пишем только dir
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -73,30 +69,25 @@ static void SilentWorker() {
         }
         if (!validPtr(h)) continue;
 
-        // ═══ СТАБИЛЬНЫЙ ORIGIN — голова локального игрока, чуть вниз ═══
-        Vector3 origin = {
-            localPos.x,
-            localPos.y - kOriginDownY,
-            localPos.z
-        };
+        // Origin читаем из игры — как в предыдущей версии
+        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        if (isZeroV3(origin)) origin = localPos;
 
-        // Пишем origin в память — движок возьмёт его как точку старта
-        WriteAddr<Vector3>(h + kHit_StartPos, origin);
-
-        // Предсказание позиции цели
+        // Предсказание
         Vector3 pred = {
             headPos.x + headVel.x * kLeadTime,
             headPos.y + headVel.y * kLeadTime,
             headPos.z + headVel.z * kLeadTime
         };
 
-        // Direction от нашего стабильного origin к предсказанной позиции
+        // RAW вектор
         Vector3 dir = {
             pred.x - origin.x,
             pred.y - origin.y,
             pred.z - origin.z
         };
 
+        // Двойная запись — для Deagle
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
@@ -166,6 +157,7 @@ void RunSilentAim() {
         return;
     }
 
+    // Скорость цели
     Vector3 rawVel = {0, 0, 0};
     if (s_havePrevTarget) {
         rawVel = {
@@ -199,16 +191,10 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // ═══ МГНОВЕННЫЙ ПИНГ ═══
+    // Мгновенный пинг — читаем origin, пишем dir
     {
-        Vector3 origin = {
-            lPos.x,
-            lPos.y - kOriginDownY,
-            lPos.z
-        };
-
-        // Пишем origin
-        WriteAddr<Vector3>(aimPtr + kHit_StartPos, origin);
+        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+        if (isZeroV3(origin)) origin = lPos;
 
         Vector3 pred = {
             head.x + g_headVel.x * kLeadTime,
