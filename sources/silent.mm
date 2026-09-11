@@ -24,8 +24,8 @@ static std::atomic<bool> g_started{false};
 
 static uint64_t g_aimPtr   = 0;
 static uint64_t g_aimKlass = 0;
-static uint64_t g_target   = 0;
-static uint64_t g_local    = 0;
+static Vector3  g_headPos  = {};
+static Vector3  g_localPos = {};
 
 static uint64_t g_lastMatch = 0;
 
@@ -42,45 +42,36 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — читает head + origin свежими КАЖДУЮ итерацию
+//  WORKER — только быстрая запись
+//  Мгновенный снимок (без lock) → klass check → write
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
         std::this_thread::yield();
 
-        if (!g_hasData.load(std::memory_order_acquire)) continue;
+        if (!g_hasData.load(std::memory_order_relaxed)) continue;
 
-        uint64_t h, target, local, expectedKlass;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            h             = g_aimPtr;
-            target        = g_target;
-            local         = g_local;
-            expectedKlass = g_aimKlass;
-        }
-        if (!validPtr(h) || !isVaildPtr(target) || !isVaildPtr(local)) continue;
+        // Быстрый снимок БЕЗ mutex (одна атомарная операция каждая)
+        uint64_t h     = g_aimPtr;
+        uint64_t klass = g_aimKlass;
+
+        if (!validPtr(h)) continue;
 
         // Защита от краша
         uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
-        if (curKlass != expectedKlass) continue;
+        if (curKlass != klass) continue;
 
-        // ═══ СВЕЖАЯ позиция головы цели — читаем прямо сейчас ═══
-        Vector3 head = HeadPos(target);
-        if (isZeroV3(head)) continue;
-        head.y += kHeadCenterY;
+        // Быстрый снимок позиций (иногда будет слегка stale — не критично)
+        Vector3 headPos  = g_headPos;
+        Vector3 localPos = g_localPos;
 
-        // ═══ СВЕЖИЙ origin — тоже прямо сейчас ═══
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (isZeroV3(origin)) {
-            origin = HeadPos(local);
-            if (isZeroV3(origin)) continue;
-        }
+        if (isZeroV3(origin)) origin = localPos;
 
-        // Прямое направление — никакой математики
         Vector3 dir = {
-            head.x - origin.x,
-            head.y - origin.y,
-            head.z - origin.z
+            headPos.x - origin.x,
+            headPos.y - origin.y,
+            headPos.z - origin.z
         };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
@@ -100,13 +91,13 @@ void ResetSilentAim() {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr   = 0;
         g_aimKlass = 0;
-        g_target   = 0;
-        g_local    = 0;
+        g_headPos  = {};
+        g_localPos = {};
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — только обновляет указатели
+//  RunSilentAim — обновляет кэш + пишет мгновенно (пинг)
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -142,12 +133,37 @@ void RunSilentAim() {
         return;
     }
 
+    Vector3 head = HeadPos(target);
+    if (isZeroV3(head)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+    head.y += kHeadCenterY;
+
+    Vector3 lPos = HeadPos(local);
+
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr   = aimPtr;
         g_aimKlass = klass;
-        g_target   = target;
-        g_local    = local;
+        g_headPos  = head;
+        g_localPos = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
+
+    // ═══ МГНОВЕННЫЙ ПИНГ — попадает в момент одиночного выстрела ═══
+    {
+        uint64_t curKlass = ReadAddr<uint64_t>(aimPtr + 0);
+        if (curKlass != klass) return;
+
+        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+        if (isZeroV3(origin)) origin = lPos;
+
+        Vector3 dir = {
+            head.x - origin.x,
+            head.y - origin.y,
+            head.z - origin.z
+        };
+        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+    }
 }
