@@ -36,7 +36,7 @@ static inline bool isZeroV3(const Vector3 &v) {
     return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
 }
 
-// Быстрая нормализация вектора (critical для корректного RayDir)
+// Быстрая нормализация вектора
 static inline Vector3 NormalizeVector(const Vector3& v) {
     float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
     if (len < 1e-5f) return {0.0f, 0.0f, 1.0f};
@@ -49,18 +49,17 @@ static Vector3 HeadPos(uint64_t pawn) {
     return validPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Общая логика записи редиректа с защитой от краша при очистке памяти
+// Принудительный расчет траектории из любой точки камеры/оружия в голову цели
 static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& head, const Vector3& lPos) {
     if (!validPtr(h)) return;
 
-    // Безопасная проверка: если объект начал разрушаться, чтение вернет неверный класс
     uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
     if (curKlass != klass || !validPtr(curKlass)) return;
 
-    Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-    // Если origin пустой или равен нулю, берем позицию игрока
+    // Принудительно используем позицию локального игрока как точку старта луча
+    Vector3 origin = lPos;
     if (isZeroV3(origin)) {
-        origin = lPos; 
+        origin = ReadAddr<Vector3>(h + kHit_StartPos);
     }
 
     Vector3 diff = {
@@ -74,7 +73,7 @@ static inline void ApplySilentWrite(uint64_t h, uint64_t klass, const Vector3& h
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — максимальная частота опроса без сна (твоя версия)
+//  WORKER — максимальная частота опроса без задержек
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (g_started.load(std::memory_order_relaxed)) {
@@ -163,6 +162,7 @@ void RunSilentAim() {
     }
     head.y += kHeadCenterY;
 
+    // Берем базовую позицию локального игрока (или его головы для старта луча)
     Vector3 lPos = HeadPos(local);
 
     {
@@ -174,6 +174,5 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенный перехват прямо в текущем тике кадра
     ApplySilentWrite(aimPtr, klass, head, lPos);
 }
