@@ -13,6 +13,7 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kHeadNode           = 0x638;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -27,9 +28,9 @@ static inline bool validPtr(uint64_t p) {
 }
 
 static Vector3 HeadPos(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return {};
-    uint64_t t = getHead(pawn);
-    return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
+    if (!validPtr(pawn)) return {};
+    uint64_t headNode = ReadAddr<uint64_t>(pawn + kHeadNode);
+    return validPtr(headNode) ? getPositionExt(headNode) : Vector3{};
 }
 
 static void SilentWorker() {
@@ -70,7 +71,7 @@ void ResetSilentAim() {
 void RunSilentAim() {
     InitSilentAimThread();
 
-    if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
+    if (!aimsilent1 || IsAtLobby(Moudule_Base) || !validPtr(cachedMatch)) {
         g_lastMatch = 0;
         ResetSilentAim();
         return;
@@ -85,7 +86,7 @@ void RunSilentAim() {
     uint64_t local  = getLocalPlayer(cachedMatch);
     uint64_t target = g_SilentBestTarget;
 
-    if (!isVaildPtr(local) || !isVaildPtr(target)) {
+    if (!validPtr(local) || !validPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
         return;
     }
