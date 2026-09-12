@@ -66,7 +66,7 @@
 #define kNickname               0x430  // confirmed
 #define kStringFirstChar        0x14
 // ─── Weapon ───────────────────────────────────
-#define _0x5BC2862 0x6E8//protected OMELKCOGCBK LPEALCPGJBL; // 0x6D8
+#define _0x5BC2862 0x6D8 // protected OMELKCOGCBK LPEALCPGJBL; // 0x6D8
 
 #define _0x2862BCD 0xA0//private NAELPAAELNO CHAFOMFBKEG; // 0xA0
 
