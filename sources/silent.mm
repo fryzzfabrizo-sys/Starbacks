@@ -12,7 +12,7 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// ─── Shared state между main thread và background thread ───────────
+// ─── Shared state giữa main thread và background thread ───────────
 static std::mutex  silentLock;
 static void       *g_HitObjInfo = nullptr;
 static Vector3     g_TargetPos  = {0.0f, 0.0f, 0.0f};
@@ -34,6 +34,16 @@ static Vector3 GetHeadPosition(uint64_t pawn) {
     uint64_t headTrans = getHead(pawn);
     if (!isVaildPtr(headTrans)) return {0.0f, 0.0f, 0.0f};
     return getPositionExt(headTrans);
+}
+
+// ─── Reset function ───────────────────────────────────────────────
+void ResetSilentAim() {
+    silentLock.lock();
+    g_HasData      = false;
+    g_HitObjInfo   = nullptr;
+    g_TargetPos    = {0.0f, 0.0f, 0.0f};
+    g_LastEnemyPos = {0.0f, 0.0f, 0.0f};
+    silentLock.unlock();
 }
 
 // ─── Background thread: redirect trajectory с нормализацией и упреждением ──
@@ -77,10 +87,7 @@ static void AimSilentThread() {
 void RunSilentAim() {
     if (!aimsilent1) {
         if (g_HasData) {
-            silentLock.lock();
-            g_HasData    = false;
-            g_HitObjInfo = nullptr;
-            silentLock.unlock();
+            ResetSilentAim();
         }
         return;
     }
@@ -92,10 +99,7 @@ void RunSilentAim() {
 
     if (!get_IsFiring(localPlayer)) {
         if (g_HasData) {
-            silentLock.lock();
-            g_HasData    = false;
-            g_HitObjInfo = nullptr;
-            silentLock.unlock();
+            ResetSilentAim();
         }
         return;
     }
@@ -103,10 +107,7 @@ void RunSilentAim() {
     uint64_t closestEnemy = GetClosestEnemysilent1();
     if (!closestEnemy) {
         if (g_HasData) {
-            silentLock.lock();
-            g_HasData    = false;
-            g_HitObjInfo = nullptr;
-            silentLock.unlock();
+            ResetSilentAim();
         }
         return;
     }
