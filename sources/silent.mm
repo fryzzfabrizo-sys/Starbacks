@@ -18,19 +18,24 @@ static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr uint64_t kHit_Scatter        = 0x5C;
 
-// ═══ Dictionary offsets (локально, для chain kill) ═══
-static constexpr uint64_t kMatchPlayerDict        = 0x148;
-static constexpr uint64_t kDictEntries            = 0x18;
-static constexpr uint64_t kIl2CppArrayMaxLength   = 0x18;
-static constexpr uint64_t kIl2CppArrayItems       = 0x20;
+// ═══ Dictionary offsets ═══
+static constexpr uint64_t kMatchPlayerDict          = 0x148;
+static constexpr uint64_t kDictEntries              = 0x18;
+static constexpr uint64_t kIl2CppArrayMaxLength     = 0x18;
+static constexpr uint64_t kIl2CppArrayItems         = 0x20;
 static constexpr uint64_t kDictEntryStrideBytePlayer = 24;
-static constexpr uint64_t kDictEntryValueOffByte  = 16;
+static constexpr uint64_t kDictEntryValueOffByte    = 16;
 
-// ═══ Knocked down offsets ═══
+// ═══ Knocked offsets ═══
 static constexpr uint64_t kMyPhysXData       = 0x1B80;
 static constexpr uint64_t kPhxNpeononogeo    = 0x20;
 static constexpr uint64_t kGhgState          = 0x10;
 static constexpr uint64_t kKnocked           = 0x1150;
+
+// ═══ ПРИОРИТЕТ БЛИЖНИХ ЦЕЛЕЙ ═══
+// Если враг ближе этого расстояния — целимся в него (игнорируя кроссхаир).
+static constexpr float kCloseCombatDist  = 5.0f;    // 5 метров
+static constexpr float kCloseCombatSq    = kCloseCombatDist * kCloseCombatDist;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -41,8 +46,6 @@ static Vector3           g_lPos           = {};
 static Vector3           g_prevTargetPos  = {};
 static Vector3           g_targetVelocity = {};
 
-static uint64_t          g_lastLocal  = 0;
-static uint64_t          g_lastTarget = 0;
 static uint64_t          g_lastMatch  = 0;
 
 // ═══ CHAIN KILL ═══
@@ -62,7 +65,6 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// ═══ Локальная копия IsKnockedDown (на случай если не видна из esp.mm) ═══
 static bool LocalIsKnockedDown(uint64_t player) {
     if (!isVaildPtr(player)) return false;
     if (get_CurHP(player) <= 0) return false;
@@ -83,7 +85,9 @@ static bool IsTargetDown(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Найти ближайшего живого (не downed) врага
+//  Выбор цели:
+//    1. Если есть враг в радиусе kCloseCombatDist — берём ближайшего из них
+//    2. Иначе — ближайший к КРОССХАИРУ (экранное расстояние)
 // ═══════════════════════════════════════════════════════════════
 static uint64_t FindNextTarget(uint64_t match, uint64_t local, uint64_t exclude) {
     if (!isVaildPtr(match) || !isVaildPtr(local)) return 0;
@@ -100,9 +104,18 @@ static uint64_t FindNextTarget(uint64_t match, uint64_t local, uint64_t exclude)
     Vector3 lPos = HeadPos(local);
     if (lPos.x == 0.0f && lPos.y == 0.0f && lPos.z == 0.0f) return 0;
 
-    uint64_t best   = 0;
-    float    bestSq = 1e18f;
-    uint64_t base   = entriesArr + kIl2CppArrayItems;
+    // View matrix для расчёта экранного расстояния
+    float *vm = GetViewMatrix(CameraMain(match));
+
+    uint64_t base = entriesArr + kIl2CppArrayItems;
+
+    // ── Проход 1: ищем в радиусе 5м (приоритет) ──────────────
+    uint64_t closeBest   = 0;
+    float    closeBestSq = kCloseCombatSq;
+
+    // ── Проход 2: ближайший к кроссхаиру ──────────────────────
+    uint64_t crossBest   = 0;
+    float    crossBestSq = 1e18f;
 
     for (int i = 0; i < slotCap; i++) {
         uint64_t ent = base + (uint64_t)kDictEntryStrideBytePlayer * (uint64_t)i;
@@ -118,16 +131,37 @@ static uint64_t FindNextTarget(uint64_t match, uint64_t local, uint64_t exclude)
         Vector3 ePos = HeadPos(pawn);
         if (ePos.x == 0.0f && ePos.y == 0.0f && ePos.z == 0.0f) continue;
 
+        // Мировая дистанция
         float dx = ePos.x - lPos.x;
         float dy = ePos.y - lPos.y;
         float dz = ePos.z - lPos.z;
         float dSq = dx*dx + dy*dy + dz*dz;
-        if (dSq < bestSq) {
-            bestSq = dSq;
-            best   = pawn;
+
+        // ── Проход 1: < 5м ──
+        if (dSq < closeBestSq) {
+            closeBestSq = dSq;
+            closeBest   = pawn;
+        }
+
+        // ── Проход 2: ближайший к кроссхаиру ──
+        float screenSq = 1e18f;
+        if (vm) {
+            Vector3 w2s = WorldToScreenLayer(ePos, vm, 1080.0f, 1920.0f, 1080.0f, 1920.0f);
+            if (w2s.z > 0.001f) {
+                float sx = w2s.x - 540.0f;   // пол-экрана по X
+                float sy = w2s.y - 960.0f;   // пол-экрана по Y
+                screenSq = sx*sx + sy*sy;
+            }
+        }
+        if (screenSq < crossBestSq) {
+            crossBestSq = screenSq;
+            crossBest   = pawn;
         }
     }
-    return best;
+
+    // Если нашли врага в 5м — он приоритетнее
+    if (isVaildPtr(closeBest)) return closeBest;
+    return crossBest;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -181,8 +215,7 @@ void InitSilentAimThread() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    g_lastLocal      = 0;
-    g_lastTarget     = 0;
+    g_lastMatch = 0;
     g_prevTargetPos  = {};
     g_targetVelocity = {};
     g_chainTarget    = 0;
@@ -217,7 +250,7 @@ void RunSilentAim() {
         return;
     }
 
-    // ═══ CHAIN KILL — переключение при смерти И нокдауне ═══
+    // ═══ CHAIN KILL ═══
     uint64_t target = g_SilentBestTarget;
     uint64_t now = nowMs();
     bool canSwitch = (now >= g_chainCooldownUntil);
