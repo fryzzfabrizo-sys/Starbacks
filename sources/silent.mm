@@ -1,147 +1,152 @@
-// SilentAim.mm
-// Silent aim строго через ITransformNode головы (offset 0x638)
-
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
+#import "../esp/drawing_view/ESPPrefs.h"
 #import "mahoa.h"
-#include <atomic>
 #include <mutex>
 #include <thread>
+#include <chrono>
 #include <cmath>
 
-extern uint64_t Moudule_Base;
+// ─── Extern ───────────────────────────────────────────────────────
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// ─── Offsets ────────────────────────────────────────────────────────
-static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;   // LastAimInfo_Ptr (iOS)
-static constexpr uint64_t kHit_RayDir         = 0x40;    // Vector3 RayDir
-static constexpr uint64_t kHit_StartPos       = 0x4C;    // Vector3 StartPos
+// ─── Shared state между main thread và background thread ───────────
+static std::mutex  silentLock;
+static void       *g_HitObjInfo = nullptr;
+static Vector3     g_TargetPos  = {0.0f, 0.0f, 0.0f};
+static bool        g_HasData    = false;
 
-static constexpr uint64_t kPlayer_HeadNode    = 0x638;   // ITransformNode Head
-static constexpr uint64_t kBodyPart_TransNode = 0x10;    // ITransformNode -> Transform
+// ─── Переменные для расчета упреждения (Prediction) ────────────────
+static Vector3     g_LastEnemyPos = {0.0f, 0.0f, 0.0f};
+static auto        g_LastTime     = std::chrono::high_resolution_clock::now();
 
-// ─── State ──────────────────────────────────────────────────────────
-static std::mutex        g_lock;
-static std::atomic<bool> g_hasData{false};
-static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr    = 0;
-static Vector3           g_tPos      = {};
-static uint64_t          g_lastMatch = 0;
-
-// ─── Helpers ────────────────────────────────────────────────────────
-static inline bool validPtr(uint64_t p) {
-    return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
+// ─── Helper: lấy enemy gần nhất từ g_SilentBestTarget ─────────────
+static uint64_t GetClosestEnemysilent1() {
+    if (!isVaildPtr(g_SilentBestTarget)) return 0;
+    return g_SilentBestTarget;
 }
 
-static inline bool validVec(const Vector3& v) {
-    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
-           !(v.x == 0.f && v.y == 0.f && v.z == 0.f);
+// ─── Helper: lấy vị trí đầu địch ─────────────────────────────────
+static Vector3 GetHeadPosition(uint64_t pawn) {
+    if (!isVaildPtr(pawn)) return {0.0f, 0.0f, 0.0f};
+    uint64_t headTrans = getHead(pawn);
+    if (!isVaildPtr(headTrans)) return {0.0f, 0.0f, 0.0f};
+    return getPositionExt(headTrans);
 }
 
-// Голова строго по оффсету: Player + 0x638 -> BodyPart + 0x10 -> Transform -> getPositionExt
-static Vector3 HeadPos(uint64_t pawn) {
-    if (!validPtr(pawn)) return {};
-
-    uint64_t bodyPart = ReadAddr<uint64_t>(pawn + kPlayer_HeadNode);
-    if (!validPtr(bodyPart)) return {};
-
-    uint64_t node = ReadAddr<uint64_t>(bodyPart + kBodyPart_TransNode);
-    if (!validPtr(node)) return {};
-
-    return getPositionExt(node);
-}
-
-// ─── Silent Worker ──────────────────────────────────────────────────
-static void SilentWorker() {
+// ─── Background thread: redirect trajectory с нормализацией и упреждением ──
+static void AimSilentThread() {
     while (true) {
-        if (!g_hasData.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-            continue;
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
+        if (!g_HasData) continue;
+
+        silentLock.lock();
+        void   *currentHitObj = g_HitObjInfo;
+        Vector3 targetPos     = g_TargetPos;
+        bool    valid         = g_HasData;
+        silentLock.unlock();
+
+        if (!valid || !currentHitObj) continue;
+
+        // Динамическое чтение позиции выстрела в реальном времени (важно при движении локального игрока)
+        Vector3 ammoBase = *(Vector3 *)((uint64_t)currentHitObj + 0x4C);
+
+        // Расчет вектора направления: target − origin
+        Vector3 dir;
+        dir.x = targetPos.x - ammoBase.x;
+        dir.y = targetPos.y - ammoBase.y;
+        dir.z = targetPos.z - ammoBase.z;
+
+        // Нормализация вектора (длина = 1), чтобы хитскан игры работал корректно
+        float length = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+        if (length > 0.0001f) {
+            dir.x /= length;
+            dir.y /= length;
+            dir.z /= length;
         }
 
-        uint64_t h;
-        Vector3  tPos;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-        }
-
-        if (!validPtr(h) || !validVec(tPos)) {
-            std::this_thread::yield();
-            continue;
-        }
-
-        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        Vector3 diff   = { tPos.x - origin.x,
-                           tPos.y - origin.y,
-                           tPos.z - origin.z };
-
-        WriteAddr<Vector3>(h + kHit_RayDir, diff);
+        // Запись нормализованного направления и предсказанной позиции в HitObjectInfo
+        *(Vector3 *)((uint64_t)currentHitObj + 0x40) = dir;
+        *(Vector3 *)((uint64_t)currentHitObj + 0x28) = targetPos;
     }
 }
 
-void InitSilentAimThread() {
-    bool exp = false;
-    if (g_started.compare_exchange_strong(exp, true))
-        std::thread(SilentWorker).detach();
-}
-
-void ResetSilentAim() {
-    g_hasData.store(false, std::memory_order_release);
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
-    g_tPos   = {};
-}
-
-// ─── Main ───────────────────────────────────────────────────────────
+// ─── Gọi mỗi frame từ renderESPWithBuffers ────────────────────────
 void RunSilentAim() {
-    InitSilentAimThread();
-
-    if (!aimsilent1 || IsAtLobby(Moudule_Base) || !validPtr(cachedMatch)) {
-        g_lastMatch = 0;
-        ResetSilentAim();
+    if (!aimsilent1) {
+        if (g_HasData) {
+            silentLock.lock();
+            g_HasData    = false;
+            g_HitObjInfo = nullptr;
+            silentLock.unlock();
+        }
         return;
     }
 
-    if (cachedMatch != g_lastMatch) {
-        ResetSilentAim();
-        g_lastMatch = cachedMatch;
+    if (!isVaildPtr(cachedMatch)) return;
+
+    uint64_t localPlayer = getLocalPlayer(cachedMatch);
+    if (!isVaildPtr(localPlayer)) return;
+
+    if (!get_IsFiring(localPlayer)) {
+        if (g_HasData) {
+            silentLock.lock();
+            g_HasData    = false;
+            g_HitObjInfo = nullptr;
+            silentLock.unlock();
+        }
         return;
     }
 
-    uint64_t local  = getLocalPlayer(cachedMatch);
-    uint64_t target = g_SilentBestTarget;
-
-    if (!validPtr(local) || !validPtr(target)) {
-        g_hasData.store(false, std::memory_order_release);
+    uint64_t closestEnemy = GetClosestEnemysilent1();
+    if (!closestEnemy) {
+        if (g_HasData) {
+            silentLock.lock();
+            g_HasData    = false;
+            g_HitObjInfo = nullptr;
+            silentLock.unlock();
+        }
         return;
     }
 
-    uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
-    if (!validPtr(aimPtr)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
+    void *hitObjInfo = *(void **)((uint64_t)localPlayer + 0xDC8);
+    if (!hitObjInfo) return;
+
+    Vector3 currentHeadPos = GetHeadPosition(closestEnemy);
+
+    // ─── Расчет скорости цели и предсказание позиции (Prediction) ───
+    auto now = std::chrono::high_resolution_clock::now();
+    float dt = std::chrono::duration<float>(now - g_LastTime).count();
+
+    Vector3 velocity = {0.0f, 0.0f, 0.0f};
+    if (dt > 0.0001f && dt < 0.1f) {
+        velocity.x = (currentHeadPos.x - g_LastEnemyPos.x) / dt;
+        velocity.y = (currentHeadPos.y - g_LastEnemyPos.y) / dt;
+        velocity.z = (currentHeadPos.z - g_LastEnemyPos.z) / dt;
     }
 
-    Vector3 tPos = HeadPos(target);
-    if (!validVec(tPos)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
+    g_LastEnemyPos = currentHeadPos;
+    g_LastTime     = now;
 
-    {
-        std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_tPos   = tPos;
-    }
-    g_hasData.store(true, std::memory_order_release);
+    // Время упреждения под скорость пуль (регулируйте под оружие: 0.1f — 0.2f)
+    float predictionTime = 0.12f;
 
-    Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
-    Vector3 diff   = { tPos.x - origin.x,
-                       tPos.y - origin.y,
-                       tPos.z - origin.z };
-    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
+    Vector3 predictedPos = {
+        currentHeadPos.x + velocity.x * predictionTime,
+        currentHeadPos.y + velocity.y * predictionTime,
+        currentHeadPos.z + velocity.z * predictionTime
+    };
+
+    silentLock.lock();
+    g_HitObjInfo = hitObjInfo;
+    g_TargetPos  = predictedPos;
+    g_HasData    = true;
+    silentLock.unlock();
+}
+
+// ─── Gọi 1 lần khi HUD khởi động ─────────────────────────────────
+void InitSilentAimThread() {
+    std::thread(AimSilentThread).detach();
 }
