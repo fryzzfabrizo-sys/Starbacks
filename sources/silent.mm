@@ -1,5 +1,5 @@
 // SilentAim.mm
-// Silent aim через ITransformNode головы (0x638) + запись TargetPos (0x28) и RayDir (0x40) с упреждением
+// Silent aim строго через ITransformNode головы (offset 0x638) без нормализации и с динамическим origin
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -19,7 +19,6 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;   // LastAimInfo_Ptr (iOS)
 static constexpr uint64_t kHit_RayDir         = 0x40;    // Vector3 RayDir
 static constexpr uint64_t kHit_StartPos       = 0x4C;    // Vector3 StartPos
-static constexpr uint64_t kHit_TargetPos      = 0x28;    // Vector3 TargetPos (из второго примера)
 
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;   // ITransformNode Head
 static constexpr uint64_t kBodyPart_TransNode = 0x10;    // ITransformNode -> Transform
@@ -81,15 +80,14 @@ static void SilentWorker() {
             continue;
         }
 
-        // Динамическое чтение origin (ammoBase) в реальном времени
+        // Динамическое чтение origin (ammoBase) в реальном времени при каждом цикле потока (учитывает движение/прыжки игрока)
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
 
-        // Запись вектора направления в +0x40 и целевой позиции в +0x28 (как во втором примере)
+        // Запись чистого вектора разницы без нормализации
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
-        WriteAddr<Vector3>(h + kHit_TargetPos, tPos);
     }
 }
 
@@ -165,7 +163,7 @@ void RunSilentAim() {
     g_lastEnemyPos = tPos;
     g_lastTime     = now;
 
-    // Время упреждения
+    // Время упреждения (настраивается под скорость пуль, обычно 0.1f — 0.2f)
     float predictionTime = 0.12f;
 
     Vector3 predictedPos = {
@@ -187,5 +185,4 @@ void RunSilentAim() {
                        predictedPos.z - origin.z };
 
     WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
-    WriteAddr<Vector3>(aimPtr + kHit_TargetPos, predictedPos);
 }
