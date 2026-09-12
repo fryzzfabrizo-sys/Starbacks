@@ -16,6 +16,8 @@ extern bool aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir = 0x40;
 static constexpr uint64_t kHit_StartPos = 0x4C;
+static constexpr uint64_t kPlayer_MainCameraTransform = 0x380;
+static constexpr uint64_t kPlayer_AimRotation = 0x5AC;
 
 static_assert(sizeof(Vector3) == 0xC, "Vector3 layout must be 12 bytes");
 
@@ -26,6 +28,10 @@ static uint64_t g_aimPtr = 0;
 static uint64_t g_local = 0;
 static Vector3 g_tPos = {};
 static uint64_t g_lastMatch = 0;
+
+std::atomic<bool> AimMagnet{true};
+std::atomic<float> AimMagnetStrength{0.35f};
+std::atomic<float> AimMagnetMaxDistance{22.0f};
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
@@ -39,6 +45,65 @@ static Vector3 HeadPos(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
     return validPtr(t) ? getPositionExt(t) : Vector3{};
+}
+
+static Vector3 ApplyAimMagnet(uint64_t local, const Vector3& targetPos) {
+    if (!AimMagnet.load(std::memory_order_relaxed))
+        return targetPos;
+
+    float strength = AimMagnetStrength.load(std::memory_order_relaxed);
+    float maxDistance = AimMagnetMaxDistance.load(std::memory_order_relaxed);
+    if (!std::isfinite(strength) || !std::isfinite(maxDistance) || maxDistance <= 0.0f)
+        return targetPos;
+
+    strength = std::fmax(0.0f, std::fmin(strength, 1.0f));
+    if (strength == 0.0f)
+        return targetPos;
+
+    uint64_t cameraTransform = ReadAddr<uint64_t>(static_cast<long>(local + kPlayer_MainCameraTransform));
+    if (!validPtr(cameraTransform))
+        return targetPos;
+
+    Vector3 cameraPos = getPositionExt(cameraTransform);
+    if (!finiteVector(cameraPos))
+        return targetPos;
+
+    Quaternion rotation = ReadAddr<Quaternion>(static_cast<long>(local + kPlayer_AimRotation));
+    float rotationNorm = Quaternion::Norm(rotation);
+    if (!std::isfinite(rotationNorm) || rotationNorm <= 0.0001f)
+        return targetPos;
+
+    Vector3 forward = Quaternion::Normalized(rotation) * Vector3::Forward();
+    forward = Vector3::Normalized(forward);
+    if (!finiteVector(forward))
+        return targetPos;
+
+    Vector3 toTarget = {
+        targetPos.x - cameraPos.x,
+        targetPos.y - cameraPos.y,
+        targetPos.z - cameraPos.z
+    };
+    float distanceSq = toTarget.x * toTarget.x + toTarget.y * toTarget.y + toTarget.z * toTarget.z;
+    if (!std::isfinite(distanceSq) || distanceSq <= 0.0001f)
+        return targetPos;
+
+    float distance = std::sqrt(distanceSq);
+    if (!std::isfinite(distance) || distance > maxDistance)
+        return targetPos;
+
+    float projectedDistance = toTarget.x * forward.x +
+                              toTarget.y * forward.y +
+                              toTarget.z * forward.z;
+    if (!std::isfinite(projectedDistance) || projectedDistance <= 0.0f)
+        return targetPos;
+
+    Vector3 linePoint = {
+        cameraPos.x + forward.x * projectedDistance,
+        cameraPos.y + forward.y * projectedDistance,
+        cameraPos.z + forward.z * projectedDistance
+    };
+    Vector3 magnetPos = Vector3::Lerp(targetPos, linePoint, strength);
+    return finiteVector(magnetPos) ? magnetPos : targetPos;
 }
 
 static bool MakeAimDirection(uint64_t aimPtr, uint64_t local, const Vector3& targetPos, Vector3& outDir) {
@@ -59,10 +124,14 @@ static bool MakeAimDirection(uint64_t aimPtr, uint64_t local, const Vector3& tar
             return false;
     }
 
+    Vector3 magnetTarget = ApplyAimMagnet(local, targetPos);
+    if (!finiteVector(magnetTarget))
+        return false;
+
     Vector3 diff = {
-        targetPos.x - origin.x,
-        targetPos.y - origin.y,
-        targetPos.z - origin.z
+        magnetTarget.x - origin.x,
+        magnetTarget.y - origin.y,
+        magnetTarget.z - origin.z
     };
 
     if (!finiteVector(diff))
