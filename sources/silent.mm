@@ -1,6 +1,7 @@
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
 #import "mahoa.h"
+#include <cmath>
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -30,7 +31,8 @@ static inline bool validPtr(uint64_t p) {
 static Vector3 HeadPos(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
     uint64_t headNode = ReadAddr<uint64_t>(pawn + kHeadNode);
-    return validPtr(headNode) ? getPositionExt(headNode) : Vector3{};
+    if (!validPtr(headNode)) return {};
+    return getPositionExt(headNode);
 }
 
 static void SilentWorker() {
@@ -51,8 +53,13 @@ static void SilentWorker() {
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         Vector3 diff  = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
+        float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+        if (lenSq <= 0.0001f) continue;
 
-        WriteAddr<Vector3>(h + kHit_RayDir, diff);
+        float   inv = 1.0f / std::sqrt(lenSq);
+        Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
+
+        WriteAddr<Vector3>(h + kHit_RayDir, dir);
     }
 }
 
@@ -112,5 +119,10 @@ void RunSilentAim() {
 
     Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
     Vector3 diff  = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
-    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
+    float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+    if (lenSq > 0.0001f) {
+        float   inv = 1.0f / std::sqrt(lenSq);
+        Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
+        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+    }
 }
