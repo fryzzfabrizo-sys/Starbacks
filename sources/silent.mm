@@ -12,10 +12,25 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
+// ═══ Silent Aim offsets ═══
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr uint64_t kHit_Scatter        = 0x5C;
+
+// ═══ Dictionary offsets (локально, для chain kill) ═══
+static constexpr uint64_t kMatchPlayerDict        = 0x148;
+static constexpr uint64_t kDictEntries            = 0x18;
+static constexpr uint64_t kIl2CppArrayMaxLength   = 0x18;
+static constexpr uint64_t kIl2CppArrayItems       = 0x20;
+static constexpr uint64_t kDictEntryStrideBytePlayer = 24;
+static constexpr uint64_t kDictEntryValueOffByte  = 16;
+
+// ═══ Knocked down offsets ═══
+static constexpr uint64_t kMyPhysXData       = 0x1B80;
+static constexpr uint64_t kPhxNpeononogeo    = 0x20;
+static constexpr uint64_t kGhgState          = 0x10;
+static constexpr uint64_t kKnocked           = 0x1150;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -47,17 +62,23 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// ═══ Проверка: цель "небоеспособна"? ═══
-// Возвращает true если цель мертва ИЛИ в нокдауне (downed).
+// ═══ Локальная копия IsKnockedDown (на случай если не видна из esp.mm) ═══
+static bool LocalIsKnockedDown(uint64_t player) {
+    if (!isVaildPtr(player)) return false;
+    if (get_CurHP(player) <= 0) return false;
+    uint64_t phx = ReadAddr<uint64_t>(player + kMyPhysXData);
+    if (isVaildPtr(phx)) {
+        uint64_t ghg = ReadAddr<uint64_t>(phx + kPhxNpeononogeo);
+        if (isVaildPtr(ghg) && ReadAddr<uint32_t>(ghg + kGhgState) == 8)
+            return true;
+    }
+    return ReadAddr<uint8_t>(player + kKnocked) != 0;
+}
+
 static bool IsTargetDown(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return true;
-
-    // Мёртв?
     if (get_CurHP(pawn) <= 0) return true;
-
-    // Нокдаун?
-    if (get_IsKnockedDown(pawn)) return true;
-
+    if (LocalIsKnockedDown(pawn)) return true;
     return false;
 }
 
@@ -92,8 +113,6 @@ static uint64_t FindNextTarget(uint64_t match, uint64_t local, uint64_t exclude)
         if (pawn == local) continue;
         if (pawn == exclude) continue;
         if (isLocalTeamMate(local, pawn)) continue;
-
-        // Пропускаем мёртвых и нокдаун
         if (IsTargetDown(pawn)) continue;
 
         Vector3 ePos = HeadPos(pawn);
@@ -112,7 +131,7 @@ static uint64_t FindNextTarget(uint64_t match, uint64_t local, uint64_t exclude)
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER THREAD
+//  WORKER
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -198,35 +217,28 @@ void RunSilentAim() {
         return;
     }
 
-    // ═══════════════════════════════════════════════════════════
-    //  CHAIN KILL — переключение при смерти ИЛИ нокдауне
-    // ═══════════════════════════════════════════════════════════
+    // ═══ CHAIN KILL — переключение при смерти И нокдауне ═══
     uint64_t target = g_SilentBestTarget;
     uint64_t now = nowMs();
     bool canSwitch = (now >= g_chainCooldownUntil);
 
     if (isVaildPtr(g_chainTarget)) {
-        // Цель мертва или в нокдауне?
         if (IsTargetDown(g_chainTarget)) {
             g_chainTarget = 0;
             if (canSwitch) {
                 uint64_t next = FindNextTarget(cachedMatch, local, 0);
                 if (isVaildPtr(next)) {
                     g_chainTarget = next;
-                    g_chainCooldownUntil = now + 50;   // 50 мс
+                    g_chainCooldownUntil = now + 50;
                     target = next;
                 }
             }
         } else {
-            // Цель активна — работаем по ней
             target = g_chainTarget;
         }
     }
 
-    // Fallback — если chain не дал цель
-    if (!isVaildPtr(target)) {
-        target = g_SilentBestTarget;
-    }
+    if (!isVaildPtr(target)) target = g_SilentBestTarget;
     if (!isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
         g_prevTargetPos  = {};
@@ -234,10 +246,7 @@ void RunSilentAim() {
         return;
     }
 
-    // Запоминаем как chain-цель если её не было
-    if (!isVaildPtr(g_chainTarget)) {
-        g_chainTarget = target;
-    }
+    if (!isVaildPtr(g_chainTarget)) g_chainTarget = target;
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
@@ -255,7 +264,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Скорость цели
     if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
         Vector3 delta = {
             tPos.x - g_prevTargetPos.x,
