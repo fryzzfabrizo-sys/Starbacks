@@ -15,108 +15,64 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kHit_Scatter        = 0x5C;   // ← разброс
+
+static constexpr float kHeadCenterY = 0.055f;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static uint64_t          g_aimPtr         = 0;
-static uint64_t          g_localPlayerPtr = 0;
-static Vector3           g_tPos           = {};
-static Vector3           g_lPos           = {};
-static Vector3           g_prevTargetPos  = {};
-static Vector3           g_targetVelocity = {};
 
-static uint64_t          g_lastLocal  = 0;
-static uint64_t          g_lastTarget = 0;
-static uint64_t          g_lastMatch  = 0;
+static uint64_t g_aimPtr   = 0;
+static uint64_t g_aimKlass = 0;
+static Vector3  g_headPos  = {};
+static Vector3  g_localPos = {};
+
+static uint64_t g_lastMatch = 0;
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
-
+static inline bool isZeroV3(const Vector3 &v) {
+    return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
+}
 static Vector3 HeadPos(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Безопасное подавление разброса через обход компонентов оружия в памяти игрока
-static void ApplySafeNoSpread(uint64_t local_player) {
-    if (!validPtr(local_player)) return;
-
-    // Проходим по стандартным смещениям менеджера оружия и слотов
-    uint64_t weaponManager = ReadAddr<uint64_t>(local_player + 0x2A0);
-    if (validPtr(weaponManager)) {
-        uint64_t weapon = ReadAddr<uint64_t>(weaponManager + 0x28);
-        if (validPtr(weapon)) {
-            // Сканируем диапазон офсетов самого оружия на предмет значений разброса (float около 9.5 или больше)
-            for (int off = 0x4B0; off <= 0x550; off += 0x4) {
-                float val = ReadAddr<float>(weapon + off);
-                // Если значение похоже на коэффициент разброса/отдачи, обнуляем его
-                if (val > 5.0f && val < 50.0f) {
-                    WriteAddr<float>(weapon + off, 0.0f);
-                }
-            }
-
-            // Проверяем контроллер стрельбы
-            uint64_t fireCtrl = ReadAddr<uint64_t>(weapon + 0x80);
-            if (validPtr(fireCtrl)) {
-                for (int off = 0x10; off <= 0x50; off += 0x4) {
-                    float val = ReadAddr<float>(fireCtrl + off);
-                    if (val > 5.0f && val < 50.0f) {
-                        WriteAddr<float>(fireCtrl + off, 0.0f);
-                    }
-                }
-            }
-        }
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════
-//  WORKER THREAD — ваш оригинальный сверхбыстрый поток
+//  WORKER
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
-        if (!g_hasData.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-            continue;
-        }
+        std::this_thread::yield();
+        if (!g_hasData.load(std::memory_order_relaxed)) continue;
 
-        uint64_t h, localP;
-        Vector3  tPos, lPos, vel;
-        {
-            std::lock_guard<std::mutex> lk(g_lock);
-            h      = g_aimPtr;
-            localP = g_localPlayerPtr;
-            tPos   = g_tPos;
-            lPos   = g_lPos;
-            vel    = g_targetVelocity;
-        }
+        uint64_t h     = g_aimPtr;
+        uint64_t klass = g_aimKlass;
         if (!validPtr(h)) continue;
 
-        // Предсказание движения цели
-        Vector3 predPos = {
-            tPos.x + vel.x * 0.06f,
-            tPos.y + vel.y * 0.06f,
-            tPos.z + vel.z * 0.06f
-        };
+        uint64_t curKlass = ReadAddr<uint64_t>(h + 0);
+        if (curKlass != klass) continue;
+
+        Vector3 headPos  = g_headPos;
+        Vector3 localPos = g_localPos;
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-            origin = lPos;
+        if (isZeroV3(origin)) origin = localPos;
 
-        Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
-        float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-        if (lenSq <= 0.0001f) continue;
+        Vector3 dir = {
+            headPos.x - origin.x,
+            headPos.y - origin.y,
+            headPos.z - origin.z
+        };
 
-        float   inv = 1.0f / std::sqrt(lenSq);
-        Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
-
-        // Пишем точное направление в голову на максимальной скорости
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
-        
-        // Параллельно гасим разброс
-        ApplySafeNoSpread(localP);
+
+        // ═══ ОБНУЛЯЕМ РАЗБРОС ═══
+        WriteAddr<float>(h + kHit_Scatter, 0.0f);
     }
 }
 
@@ -128,23 +84,23 @@ void InitSilentAimThread() {
 
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
-    g_lastLocal      = 0;
-    g_lastTarget     = 0;
-    g_prevTargetPos  = {};
-    g_targetVelocity = {};
-    std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr         = 0;
-    g_localPlayerPtr = 0;
+    g_lastMatch = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_aimPtr   = 0;
+        g_aimKlass = 0;
+        g_headPos  = {};
+        g_localPos = {};
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Вызывается из updateFrame (60 fps)
+//  RunSilentAim
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
 
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !isVaildPtr(cachedMatch)) {
-        g_lastMatch = 0;
         ResetSilentAim();
         return;
     }
@@ -160,68 +116,55 @@ void RunSilentAim() {
 
     if (!isVaildPtr(local) || !isVaildPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
-    Vector3 tPos = HeadPos(target);
-    if (tPos.x == 0.0f && tPos.y == 0.0f && tPos.z == 0.0f) {
+    uint64_t klass = ReadAddr<uint64_t>(aimPtr + 0);
+    if (!validPtr(klass)) {
         g_hasData.store(false, std::memory_order_release);
-        g_prevTargetPos  = {};
-        g_targetVelocity = {};
         return;
     }
 
-    // Оценка скорости цели
-    if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
-        Vector3 delta = {
-            tPos.x - g_prevTargetPos.x,
-            tPos.y - g_prevTargetPos.y,
-            tPos.z - g_prevTargetPos.z
-        };
-        float distSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-        if (distSq < 25.0f) {
-            g_targetVelocity = delta;
-        } else {
-            g_targetVelocity = {0.0f, 0.0f, 0.0f};
-        }
-    } else {
-        g_targetVelocity = {0.0f, 0.0f, 0.0f};
+    Vector3 head = HeadPos(target);
+    if (isZeroV3(head)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
     }
-    g_prevTargetPos = tPos;
+    head.y += kHeadCenterY;
 
-    tPos.y += 0.05f;
+    Vector3 lPos = HeadPos(local);
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr         = aimPtr;
-        g_localPlayerPtr = local;
-        g_tPos           = tPos;
-        g_lPos           = HeadPos(local);
+        g_aimPtr   = aimPtr;
+        g_aimKlass = klass;
+        g_headPos  = head;
+        g_localPos = lPos;
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенный вызов на текущем кадре
-    if (validPtr(aimPtr)) {
+    // Мгновенный пинг
+    {
+        uint64_t curKlass = ReadAddr<uint64_t>(aimPtr + 0);
+        if (curKlass != klass) return;
+
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
-        if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
-            origin = g_lPos;
-        Vector3 diff  = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
-        float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-        if (lenSq > 0.0001f) {
-            float   inv = 1.0f / std::sqrt(lenSq);
-            Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
-            WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
-            ApplySafeNoSpread(local);
-        }
+        if (isZeroV3(origin)) origin = lPos;
+
+        Vector3 dir = {
+            head.x - origin.x,
+            head.y - origin.y,
+            head.z - origin.z
+        };
+        WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+
+        // ═══ ОБНУЛЯЕМ РАЗБРОС ═══
+        WriteAddr<float>(aimPtr + kHit_Scatter, 0.0f);
     }
 }
