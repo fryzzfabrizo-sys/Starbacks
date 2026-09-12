@@ -15,11 +15,13 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kHit_Scatter        = 0x5C; // Смещение разброса пули
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
 static uint64_t          g_aimPtr         = 0;
+static uint64_t          g_localPlayerPtr = 0; // Сохраняем для доступа к оружию в потоке
 static Vector3           g_tPos           = {};
 static Vector3           g_lPos           = {};
 static Vector3           g_prevTargetPos  = {};
@@ -39,9 +41,54 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
+// Вспомогательная функция для безопасного обнуления разброса в структуре оружия
+static inline void tryZeroScatter(uint64_t obj, uint64_t off) {
+    if (!validPtr(obj)) return;
+    float v = ReadAddr<float>(obj + off);
+    if (v > 0.0001f && v < 1.0f) {
+        WriteAddr<float>(obj + off, 0.0f);
+    }
+}
+
+// Подавление разброса оружия и текущего выстрела
+static void ApplyNoSpreadOrRecoil(uint64_t local_player, uint64_t h) {
+    if (!validPtr(local_player)) return;
+
+    // 1. Обнуляем разброс в самом объекте хит-инфо (несколько возможных офсетов для надежности)
+    const uint64_t hitObjOffs[4] = { 0xDC8, 0xDD0, 0xA90, 0xAA0 };
+    for (int k = 0; k < 4; k++) {
+        uint64_t hitObj = ReadAddr<uint64_t>(local_player + hitObjOffs[k]);
+        if (validPtr(hitObj)) {
+            WriteAddr<float>(hitObj + kHit_Scatter, 0.0f);
+        }
+    }
+    if (validPtr(h)) {
+        WriteAddr<float>(h + kHit_Scatter, 0.0f);
+    }
+
+    // 2. Достаем текущее оружие в руках и обнуляем разброс в fireCtrl (офсеты оружия)
+    // Функция получения оружия на руках (индекс может отличаться, но логика стандартная)
+    typedef uint64_t(*GetWeaponFn)(uint64_t);
+    static GetWeaponFn _GetWeaponOnHand1 = (GetWeaponFn)getRealOffset(0x53BE110);
+    
+    if (_GetWeaponOnHand1) {
+        uint64_t weapon = _GetWeaponOnHand1(local_player);
+        if (validPtr(weapon)) {
+            uint64_t fireCtrl = ReadAddr<uint64_t>(weapon + 0x80);
+            if (validPtr(fireCtrl)) {
+                tryZeroScatter(fireCtrl, 0x18);
+                tryZeroScatter(fireCtrl, 0x1C);
+                tryZeroScatter(fireCtrl, 0x30);
+            }
+            tryZeroScatter(weapon, 0x4FC);
+            tryZeroScatter(weapon, 0x500);
+            tryZeroScatter(weapon, 0x510);
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════
-//  WORKER THREAD — пишет направление на максимальной скорости,
-//  чтобы выиграть гонку с игрой (игра тоже пишет в +0x40).
+//  WORKER THREAD — пишет направление и давит разброс на максимальной скорости
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -50,14 +97,15 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h;
+        uint64_t h, localP;
         Vector3  tPos, lPos, vel;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
-            vel  = g_targetVelocity;
+            h      = g_aimPtr;
+            localP = g_localPlayerPtr;
+            tPos   = g_tPos;
+            lPos   = g_lPos;
+            vel    = g_targetVelocity;
         }
         if (!validPtr(h)) continue;
 
@@ -79,7 +127,21 @@ static void SilentWorker() {
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
+        // Жестко переписываем направление на голову и гасим разброс
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
+        ApplyNoSpreadOrRecoil(localP, h);
+
+        // Дополнительно проходим по альтернативным указателям хит-инфо в фоновом потоке
+        if (validPtr(localP)) {
+            const uint64_t extraOffs[3] = { 0xDD0, 0xA90, 0xAA0 };
+            for (int i = 0; i < 3; i++) {
+                uint64_t altHit = ReadAddr<uint64_t>(localP + extraOffs[i]);
+                if (validPtr(altHit)) {
+                    WriteAddr<Vector3>(altHit + kHit_RayDir, dir);
+                    WriteAddr<float>(altHit + kHit_Scatter, 0.0f);
+                }
+            }
+        }
     }
 }
 
@@ -96,7 +158,8 @@ void ResetSilentAim() {
     g_prevTargetPos  = {};
     g_targetVelocity = {};
     std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr = 0;
+    g_aimPtr         = 0;
+    g_localPlayerPtr = 0;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -165,14 +228,14 @@ void RunSilentAim() {
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
+        g_aimPtr         = aimPtr;
+        g_localPlayerPtr = local;
+        g_tPos           = tPos;
+        g_lPos           = HeadPos(local);
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Дополнительный мгновенный пинг (может помочь на первых кадрах)
-    // — вручную один раз, не ждём тик потока.
+    // Принудительный мгновенный вызов для кадра
     if (validPtr(aimPtr)) {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
@@ -183,6 +246,7 @@ void RunSilentAim() {
             float   inv = 1.0f / std::sqrt(lenSq);
             Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
             WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+            ApplyNoSpreadOrRecoil(local, aimPtr);
         }
     }
 }
