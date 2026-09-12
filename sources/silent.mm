@@ -15,6 +15,7 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kHit_Scatter        = 0x5C;   // ← НОВОЕ: разброс пули
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -40,8 +41,7 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER THREAD — пишет направление на максимальной скорости,
-//  чтобы выиграть гонку с игрой (игра тоже пишет в +0x40).
+//  WORKER THREAD
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -80,6 +80,9 @@ static void SilentWorker() {
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
+
+        // ═══ ОБНУЛЯЕМ РАЗБРОС ═══
+        WriteAddr<float>(h + kHit_Scatter, 0.0f);
     }
 }
 
@@ -100,7 +103,7 @@ void ResetSilentAim() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Вызывается из updateFrame (60 fps). Обновляет данные для потока.
+//  RunSilentAim — вызывается из updateFrame (60 fps)
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -171,8 +174,7 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Дополнительный мгновенный пинг (может помочь на первых кадрах)
-    // — вручную один раз, не ждём тик потока.
+    // Мгновенный пинг
     if (validPtr(aimPtr)) {
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
@@ -183,6 +185,9 @@ void RunSilentAim() {
             float   inv = 1.0f / std::sqrt(lenSq);
             Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
             WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
+
+            // ═══ ОБНУЛЯЕМ РАЗБРОС ═══
+            WriteAddr<float>(aimPtr + kHit_Scatter, 0.0f);
         }
     }
 }
