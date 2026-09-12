@@ -18,13 +18,9 @@ extern bool     aimsilent1;
 //  🎯 РУЧНАЯ ПОДГОНКА
 // ═══════════════════════════════════════════════════════════════════
 static constexpr float kHeadXOffset = 0.0f;
-static constexpr float kHeadYOffset = 0.10f;   // + выше / - ниже
+static constexpr float kHeadYOffset = 0.10f;
 static constexpr float kHeadZOffset = 0.0f;
 
-//  Скорость пули. Чем МЕНЬШЕ — тем СИЛЬНЕЕ упреждение по бегущим.
-//    SMG/AR  : 250 … 300
-//    Среднее : 180 … 220   ← рабочее
-//    Снайпер : 100 … 150
 static constexpr float kBVR = 200.0f;
 // ═══════════════════════════════════════════════════════════════════
 
@@ -33,16 +29,19 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-static constexpr uint64_t kPlayer_HeadNode    = 0x638;   // ITransformNode Head
+static constexpr uint64_t kPlayer_HeadNode    = 0x638;
 static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
-// velocity chain A
 static constexpr uint64_t kPhysCCT_Off          = 0x200;
 static constexpr uint64_t kPhysCCT_Velocity_Off = 0x17C;
 
-// velocity chain B (fallback)
 static constexpr uint64_t kMyPhysXData_Off      = 0x1B80;
 static constexpr uint64_t kPhxNpeononogeo_Off   = 0x20;
+
+// ─── Sane limits (защита от мусора) ─────────────────────────────────
+static constexpr float kMaxPlayerSpeed = 20.0f;    // м/с, реальные игроки быстрее не бегают
+static constexpr float kMaxAimDist     = 400.0f;   // м, отсекаем абсурд
+static constexpr float kMinAimDist     = 0.5f;
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        g_lock;
@@ -52,6 +51,7 @@ static uint64_t          g_aimPtr    = 0;
 static Vector3           g_tPos      = {};
 static Vector3           g_tVel      = {};
 static uint64_t          g_lastMatch = 0;
+static uint64_t          g_lastTarget = 0;   // ← отслеживаем смену цели
 
 // ─── Helpers ────────────────────────────────────────────────────────
 static inline bool validPtr(uint64_t p) {
@@ -61,6 +61,10 @@ static inline bool validPtr(uint64_t p) {
 static inline bool validVec(const Vector3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
            !(v.x == 0.f && v.y == 0.f && v.z == 0.f);
+}
+
+static inline bool validVecAllowZero(const Vector3& v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
 
 // Player + 0x638 -> BodyPart + 0x10 -> Transform -> getPositionExt
@@ -76,34 +80,48 @@ static Vector3 HeadPos(uint64_t pawn) {
     return getPositionExt(node);
 }
 
-// Скорость цели: A (0x200 -> 0x17C), потом B (0x1B80 -> 0x20 -> 0x17C)
+// Скорость цели. Только chain A. Если A валиден — доверяем ему даже при (0,0,0).
+// Chain B только если указатель A вообще не читается.
 static Vector3 TargetVelocity(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
 
+    // chain A
     uint64_t cct = ReadAddr<uint64_t>(pawn + kPhysCCT_Off);
     if (validPtr(cct)) {
         Vector3 v = ReadAddr<Vector3>(cct + kPhysCCT_Velocity_Off);
-        if (std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
-            (v.x != 0.f || v.y != 0.f || v.z != 0.f)) {
-            return v;
-        }
+        if (validVecAllowZero(v)) return v;   // ← доверяем, включая нулевую
     }
 
+    // chain B — резерв
     uint64_t phys = ReadAddr<uint64_t>(pawn + kMyPhysXData_Off);
     if (!validPtr(phys)) return {};
     cct = ReadAddr<uint64_t>(phys + kPhxNpeononogeo_Off);
     if (!validPtr(cct)) return {};
-    return ReadAddr<Vector3>(cct + kPhysCCT_Velocity_Off);
+    Vector3 v = ReadAddr<Vector3>(cct + kPhysCCT_Velocity_Off);
+    return validVecAllowZero(v) ? v : Vector3{};
 }
 
-// (tPos - origin) + velocity * tFly + offsets
-static Vector3 BuildRayDir(const Vector3& origin, const Vector3& tPos, const Vector3& tVel) {
+// Clamp скорости до реалистичной — режет любой мусор
+static Vector3 ClampVelocity(const Vector3& v) {
+    float m2 = v.x*v.x + v.y*v.y + v.z*v.z;
+    if (m2 <= kMaxPlayerSpeed * kMaxPlayerSpeed) return v;
+    float m = std::sqrt(m2);
+    float s = kMaxPlayerSpeed / m;
+    return Vector3{ v.x*s, v.y*s, v.z*s };
+}
+
+static Vector3 BuildRayDir(const Vector3& origin, const Vector3& tPos, const Vector3& tVelIn) {
     float dx   = tPos.x - origin.x;
     float dy   = tPos.y - origin.y;
     float dz   = tPos.z - origin.z;
     float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
 
-    float tFly = (kBVR > 1.0f) ? (dist / kBVR) : 0.0f;
+    // отсечь абсурдные дистанции — луч не пишем, ждём следующего кадра
+    if (dist < kMinAimDist || dist > kMaxAimDist) return Vector3{};
+
+    float tFly = dist / kBVR;
+
+    Vector3 tVel = ClampVelocity(tVelIn);
 
     return Vector3{
         dx + tVel.x * tFly + kHeadXOffset,
@@ -137,6 +155,9 @@ static void SilentWorker() {
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         Vector3 diff   = BuildRayDir(origin, tPos, tVel);
 
+        // если дистанция неадекватна — не пишем вовсе
+        if (diff.x == 0.f && diff.y == 0.f && diff.z == 0.f) continue;
+
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
     }
 }
@@ -160,14 +181,16 @@ void RunSilentAim() {
     InitSilentAimThread();
 
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !validPtr(cachedMatch)) {
-        g_lastMatch = 0;
+        g_lastMatch  = 0;
+        g_lastTarget = 0;
         ResetSilentAim();
         return;
     }
 
     if (cachedMatch != g_lastMatch) {
         ResetSilentAim();
-        g_lastMatch = cachedMatch;
+        g_lastMatch  = cachedMatch;
+        g_lastTarget = 0;
         return;
     }
 
@@ -176,6 +199,13 @@ void RunSilentAim() {
 
     if (!validPtr(local) || !validPtr(target)) {
         g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    // смена цели → сброс, чтобы worker не писал старую позицию в новый aim-буфер
+    if (target != g_lastTarget) {
+        ResetSilentAim();
+        g_lastTarget = target;
         return;
     }
 
@@ -191,7 +221,7 @@ void RunSilentAim() {
         return;
     }
 
-    Vector3 tVel = TargetVelocity(target);
+    Vector3 tVel = ClampVelocity(TargetVelocity(target));
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
@@ -203,6 +233,8 @@ void RunSilentAim() {
 
     Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
     Vector3 diff   = BuildRayDir(origin, tPos, tVel);
+
+    if (diff.x == 0.f && diff.y == 0.f && diff.z == 0.f) return;
 
     WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
 }
