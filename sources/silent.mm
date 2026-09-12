@@ -14,6 +14,18 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
+// ═══════════════════════════════════════════════════════════════════
+//  👇👇👇  ЗДЕСЬ ПОДЫМАЕШЬ / ОПУСКАЕШЬ ПРИЦЕЛ ПО Y  👇👇👇
+// ───────────────────────────────────────────────────────────────────
+//  0.00f  — центр головы
+//  0.05f  — верх головы
+//  0.10f  — макушка  ← рабочее значение
+//  0.15f  — выше головы
+//  Меняй в плюс = поднять, в минус = опустить (например -0.05f)
+// ═══════════════════════════════════════════════════════════════════
+static constexpr float kHeadYOffset = 0.05f;
+// ═══════════════════════════════════════════════════════════════════
+
 // ─── Offsets ────────────────────────────────────────────────────────
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;   // LastAimInfo_Ptr (iOS)
 static constexpr uint64_t kHit_RayDir         = 0x40;    // Vector3 RayDir
@@ -75,8 +87,10 @@ static void SilentWorker() {
         }
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+
+        // 👇 kHeadYOffset применяется здесь (постоянный поток)
         Vector3 diff   = { tPos.x - origin.x,
-                           tPos.y - origin.y,
+                           tPos.y - origin.y + kHeadYOffset,
                            tPos.z - origin.z };
 
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
@@ -140,8 +154,11 @@ void RunSilentAim() {
     g_hasData.store(true, std::memory_order_release);
 
     Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+
+    // 👇 kHeadYOffset применяется здесь (мгновенная запись)
     Vector3 diff   = { tPos.x - origin.x,
-                       tPos.y - origin.y,
+                       tPos.y - origin.y + kHeadYOffset,
                        tPos.z - origin.z };
+
     WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
 }
