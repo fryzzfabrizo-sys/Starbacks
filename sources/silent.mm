@@ -16,17 +16,17 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr uint64_t kHit_Scatter        = 0x5C;
-
-// ── WALL BANG ─────────────────────────────────────────────
-// Дистанция от головы цели, куда ставим новый origin.
-// 1.5 = компромисс: raycast не начинается в стене,
-// но и не так далеко, чтобы античит понял "origin не у игрока".
-static constexpr float kWallBangOriginDist = 1.5f;
+static constexpr uint64_t kHit_HitGroup       = 0x64;
+static constexpr uint64_t kHit_IgnoreHappens  = 0x70;
+static constexpr uint64_t kHit_ViewBlocked    = 0x71;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
-static std::atomic<bool> g_wallBangEnabled{false};   // toggle
+
+// ═══ ВСЁ ВКЛЮЧЕНО ПО УМОЛЧАНИЮ ═══
+static std::atomic<bool> g_wallBangEnabled{true};    // за стену
+static std::atomic<bool> g_scatterReset{true};       // без разброса
 
 static uint64_t          g_aimPtr         = 0;
 static Vector3           g_tPos           = {};
@@ -69,7 +69,7 @@ static void SilentWorker() {
         }
         if (!validPtr(h)) continue;
 
-        // Предсказание
+        // Предсказание движения
         Vector3 predPos = {
             tPos.x + vel.x * 0.06f,
             tPos.y + vel.y * 0.06f,
@@ -80,31 +80,6 @@ static void SilentWorker() {
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
             origin = lPos;
 
-        // ═══ WALL BANG ═══
-        if (g_wallBangEnabled.load(std::memory_order_relaxed)) {
-            // Вектор от игрока к цели
-            float dx = predPos.x - lPos.x;
-            float dy = predPos.y - lPos.y;
-            float dz = predPos.z - lPos.z;
-            float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
-
-            if (dist > 0.5f) {
-                float invD = 1.0f / dist;
-                float nx = dx * invD;
-                float ny = dy * invD;
-                float nz = dz * invD;
-
-                // Новый origin: рядом с головой цели, со стороны игрока
-                origin.x = predPos.x - nx * kWallBangOriginDist;
-                origin.y = predPos.y - ny * kWallBangOriginDist;
-                origin.z = predPos.z - nz * kWallBangOriginDist;
-
-                // Перезаписываем origin в памяти
-                WriteAddr<Vector3>(h + kHit_StartPos, origin);
-            }
-        }
-
-        // Направление от (нового) origin к цели
         Vector3 diff  = { predPos.x - origin.x, predPos.y - origin.y, predPos.z - origin.z };
         float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
         if (lenSq <= 0.0001f) continue;
@@ -113,7 +88,18 @@ static void SilentWorker() {
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
-        WriteAddr<float>(h + kHit_Scatter, 0.0f);
+
+        // Разброс = 0
+        if (g_scatterReset.load(std::memory_order_relaxed)) {
+            WriteAddr<float>(h + kHit_Scatter, 0.0f);
+        }
+
+        // Wall Bang
+        if (g_wallBangEnabled.load(std::memory_order_relaxed)) {
+            WriteAddr<uint8_t>(h + kHit_ViewBlocked,   0);
+            WriteAddr<uint8_t>(h + kHit_IgnoreHappens, 0);
+            WriteAddr<int32_t>(h + kHit_HitGroup,      1);
+        }
     }
 }
 
@@ -132,10 +118,6 @@ void ResetSilentAim() {
     std::lock_guard<std::mutex> lk(g_lock);
     g_aimPtr = 0;
 }
-
-// Публичное API
-extern "C" void SetWallBang(bool on) { g_wallBangEnabled.store(on); }
-extern "C" bool GetWallBang()        { return g_wallBangEnabled.load(); }
 
 // ═══════════════════════════════════════════════════════════════
 //  RunSilentAim
@@ -181,7 +163,7 @@ void RunSilentAim() {
         return;
     }
 
-    // Скорость цели
+    // Оценка скорости цели
     if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
         Vector3 delta = {
             tPos.x - g_prevTargetPos.x,
@@ -211,28 +193,11 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // ═══ Мгновенный пинг — с Wall Bang ═══
+    // Мгновенный пинг
     if (validPtr(aimPtr)) {
-        // База
         Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
         if (origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f)
             origin = lPos;
-
-        // Wall Bang
-        if (g_wallBangEnabled.load(std::memory_order_relaxed)) {
-            float dx = tPos.x - lPos.x;
-            float dy = tPos.y - lPos.y;
-            float dz = tPos.z - lPos.z;
-            float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
-
-            if (dist > 0.5f) {
-                float invD = 1.0f / dist;
-                origin.x = tPos.x - (dx * invD) * kWallBangOriginDist;
-                origin.y = tPos.y - (dy * invD) * kWallBangOriginDist;
-                origin.z = tPos.z - (dz * invD) * kWallBangOriginDist;
-                WriteAddr<Vector3>(aimPtr + kHit_StartPos, origin);
-            }
-        }
 
         Vector3 diff  = { tPos.x - origin.x, tPos.y - origin.y, tPos.z - origin.z };
         float   lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
@@ -240,7 +205,18 @@ void RunSilentAim() {
             float   inv = 1.0f / std::sqrt(lenSq);
             Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
             WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
-            WriteAddr<float>(aimPtr + kHit_Scatter, 0.0f);
+
+            // Разброс = 0
+            if (g_scatterReset.load(std::memory_order_relaxed)) {
+                WriteAddr<float>(aimPtr + kHit_Scatter, 0.0f);
+            }
+
+            // Wall Bang
+            if (g_wallBangEnabled.load(std::memory_order_relaxed)) {
+                WriteAddr<uint8_t>(aimPtr + kHit_ViewBlocked,   0);
+                WriteAddr<uint8_t>(aimPtr + kHit_IgnoreHappens, 0);
+                WriteAddr<int32_t>(aimPtr + kHit_HitGroup,      1);
+            }
         }
     }
 }
