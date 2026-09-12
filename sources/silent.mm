@@ -15,12 +15,15 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
-static constexpr uint64_t kHit_Scatter        = 0x5C;
+
+// ═══ SCATTER — оффсет внутри WEAPON (не в HitObjectInfo!) ═══
+static constexpr uint64_t kWeapon_Scatter     = 0x5C;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
 static uint64_t          g_aimPtr         = 0;
+static uint64_t          g_localPlayer    = 0;
 static Vector3           g_tPos           = {};
 static Vector3           g_lPos           = {};
 static Vector3           g_prevTargetPos  = {};
@@ -38,7 +41,22 @@ static Vector3 HeadPos(uint64_t pawn) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  WORKER — пишет направление на максимальной скорости
+//  Обнуление разброса оружия
+// ═══════════════════════════════════════════════════════════════
+static void ZeroWeaponScatter(uint64_t local) {
+    if (!isVaildPtr(local)) return;
+    uint64_t wpn = WeaponOnHand(local);
+    if (!isVaildPtr(wpn)) return;
+
+    // Пробуем несколько возможных оффсетов scatter
+    // (обычно один из них — правильный)
+    WriteAddr<float>(wpn + 0x5C, 0.0f);   // по твоему offset
+    WriteAddr<float>(wpn + 0x58, 0.0f);   // рядом
+    WriteAddr<float>(wpn + 0x60, 0.0f);   // рядом
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  WORKER
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -47,17 +65,22 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h;
+        uint64_t h, local;
         Vector3  tPos, lPos, vel;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
-            vel  = g_targetVelocity;
+            h     = g_aimPtr;
+            local = g_localPlayer;
+            tPos  = g_tPos;
+            lPos  = g_lPos;
+            vel   = g_targetVelocity;
         }
         if (!validPtr(h)) continue;
 
+        // ═══ ОБНУЛЕНИЕ РАЗБРОСА в Weapon ═══
+        ZeroWeaponScatter(local);
+
+        // ═══ SILENT AIM ═══
         Vector3 predPos = {
             tPos.x + vel.x * 0.06f,
             tPos.y + vel.y * 0.06f,
@@ -76,7 +99,6 @@ static void SilentWorker() {
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
-        WriteAddr<float>(h + kHit_Scatter, 0.0f);
     }
 }
 
@@ -91,13 +113,13 @@ void ResetSilentAim() {
     g_lastMatch      = 0;
     g_prevTargetPos  = {};
     g_targetVelocity = {};
+    g_localPlayer    = 0;
     std::lock_guard<std::mutex> lk(g_lock);
     g_aimPtr = 0;
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  RunSilentAim — просто использует g_SilentBestTarget
-//  Цель выбирает esp.mm по своему алгоритму (ближайший к кроссхаиру)
+//  RunSilentAim
 // ═══════════════════════════════════════════════════════════════
 void RunSilentAim() {
     InitSilentAimThread();
@@ -124,7 +146,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Если текущая цель умерла — не пишем, esp.mm в следующем кадре даст новую
     if (get_CurHP(target) <= 0) {
         g_hasData.store(false, std::memory_order_release);
         g_prevTargetPos  = {};
@@ -148,7 +169,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Скорость цели
     if (g_prevTargetPos.x != 0.0f || g_prevTargetPos.y != 0.0f || g_prevTargetPos.z != 0.0f) {
         Vector3 delta = {
             tPos.x - g_prevTargetPos.x,
@@ -170,11 +190,15 @@ void RunSilentAim() {
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
+        g_aimPtr      = aimPtr;
+        g_localPlayer = local;
+        g_tPos        = tPos;
+        g_lPos        = HeadPos(local);
     }
     g_hasData.store(true, std::memory_order_release);
+
+    // Мгновенное обнуление разброса
+    ZeroWeaponScatter(local);
 
     // Мгновенный пинг
     if (validPtr(aimPtr)) {
@@ -187,7 +211,6 @@ void RunSilentAim() {
             float   inv = 1.0f / std::sqrt(lenSq);
             Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
             WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
-            WriteAddr<float>(aimPtr + kHit_Scatter, 0.0f);
         }
     }
 }
