@@ -15,12 +15,12 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
-static constexpr uint64_t kHit_Scatter        = 0x5C; // Офсет разброса пули
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
 static uint64_t          g_aimPtr         = 0;
+static uint64_t          g_localPlayerPtr = 0;
 static Vector3           g_tPos           = {};
 static Vector3           g_lPos           = {};
 static Vector3           g_prevTargetPos  = {};
@@ -40,8 +40,40 @@ static Vector3 HeadPos(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
+// Безопасное подавление разброса через обход компонентов оружия в памяти игрока
+static void ApplySafeNoSpread(uint64_t local_player) {
+    if (!validPtr(local_player)) return;
+
+    // Проходим по стандартным смещениям менеджера оружия и слотов
+    uint64_t weaponManager = ReadAddr<uint64_t>(local_player + 0x2A0);
+    if (validPtr(weaponManager)) {
+        uint64_t weapon = ReadAddr<uint64_t>(weaponManager + 0x28);
+        if (validPtr(weapon)) {
+            // Сканируем диапазон офсетов самого оружия на предмет значений разброса (float около 9.5 или больше)
+            for (int off = 0x4B0; off <= 0x550; off += 0x4) {
+                float val = ReadAddr<float>(weapon + off);
+                // Если значение похоже на коэффициент разброса/отдачи, обнуляем его
+                if (val > 5.0f && val < 50.0f) {
+                    WriteAddr<float>(weapon + off, 0.0f);
+                }
+            }
+
+            // Проверяем контроллер стрельбы
+            uint64_t fireCtrl = ReadAddr<uint64_t>(weapon + 0x80);
+            if (validPtr(fireCtrl)) {
+                for (int off = 0x10; off <= 0x50; off += 0x4) {
+                    float val = ReadAddr<float>(fireCtrl + off);
+                    if (val > 5.0f && val < 50.0f) {
+                        WriteAddr<float>(fireCtrl + off, 0.0f);
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════
-//  WORKER THREAD — максимальная скорость, пишет вектор и гасит разброс
+//  WORKER THREAD — ваш оригинальный сверхбыстрый поток
 // ═══════════════════════════════════════════════════════════════
 static void SilentWorker() {
     while (true) {
@@ -50,14 +82,15 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h;
+        uint64_t h, localP;
         Vector3  tPos, lPos, vel;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            lPos = g_lPos;
-            vel  = g_targetVelocity;
+            h      = g_aimPtr;
+            localP = g_localPlayerPtr;
+            tPos   = g_tPos;
+            lPos   = g_lPos;
+            vel    = g_targetVelocity;
         }
         if (!validPtr(h)) continue;
 
@@ -79,9 +112,11 @@ static void SilentWorker() {
         float   inv = 1.0f / std::sqrt(lenSq);
         Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
 
-        // Пишем точное направление и сразу обнуляем разброс в хит-структуре
+        // Пишем точное направление в голову на максимальной скорости
         WriteAddr<Vector3>(h + kHit_RayDir, dir);
-        WriteAddr<float>(h + kHit_Scatter, 0.0f);
+        
+        // Параллельно гасим разброс
+        ApplySafeNoSpread(localP);
     }
 }
 
@@ -99,6 +134,7 @@ void ResetSilentAim() {
     g_targetVelocity = {};
     std::lock_guard<std::mutex> lk(g_lock);
     g_aimPtr         = 0;
+    g_localPlayerPtr = 0;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -167,9 +203,10 @@ void RunSilentAim() {
 
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr = aimPtr;
-        g_tPos   = tPos;
-        g_lPos   = HeadPos(local);
+        g_aimPtr         = aimPtr;
+        g_localPlayerPtr = local;
+        g_tPos           = tPos;
+        g_lPos           = HeadPos(local);
     }
     g_hasData.store(true, std::memory_order_release);
 
@@ -184,7 +221,7 @@ void RunSilentAim() {
             float   inv = 1.0f / std::sqrt(lenSq);
             Vector3 dir = { diff.x * inv, diff.y * inv, diff.z * inv };
             WriteAddr<Vector3>(aimPtr + kHit_RayDir, dir);
-            WriteAddr<float>(aimPtr + kHit_Scatter, 0.0f);
+            ApplySafeNoSpread(local);
         }
     }
 }
