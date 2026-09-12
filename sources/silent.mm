@@ -1,6 +1,5 @@
 // SilentAim.mm
 // Silent aim через ITransformNode головы (0x638) + предикция движения цели
-// Все оффсеты — из offset.h
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -16,35 +15,34 @@ extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
 // ═══════════════════════════════════════════════════════════════════
-//  🎯 РУЧНАЯ ПОДГОНКА (единственные константы, которые не из offset.h)
+//  🎯 РУЧНАЯ ПОДГОНКА
 // ═══════════════════════════════════════════════════════════════════
-//  Тонкая доводка прицела (обычно 0 — предикция сама всё делает)
 static constexpr float kHeadXOffset = 0.0f;
 static constexpr float kHeadYOffset = 0.10f;   // + выше / - ниже
 static constexpr float kHeadZOffset = 0.0f;
 
 //  Скорость пули. Чем МЕНЬШЕ — тем СИЛЬНЕЕ упреждение по бегущим.
-//    Быстрое оружие (SMG/AR) : 250 … 300
-//    Среднее                 : 180 … 220   ← рабочее
-//    Снайперка / медленный   : 100 … 150
+//    SMG/AR  : 250 … 300
+//    Среднее : 180 … 220   ← рабочее
+//    Снайпер : 100 … 150
 static constexpr float kBVR = 200.0f;
 // ═══════════════════════════════════════════════════════════════════
 
-// ─── Offsets (все из offset.h) ──────────────────────────────────────
-static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;   // LastAimInfo_Ptr (iOS)
-static constexpr uint64_t kHit_RayDir         = 0x40;    // Vector3 RayDir
-static constexpr uint64_t kHit_StartPos       = 0x4C;    // Vector3 StartPos
+// ─── Offsets ────────────────────────────────────────────────────────
+static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
+static constexpr uint64_t kHit_RayDir         = 0x40;
+static constexpr uint64_t kHit_StartPos       = 0x4C;
 
-static constexpr uint64_t kPlayer_HeadNode    = kHeadNode;        // 0x638
-static constexpr uint64_t kBodyPart_TransNode = kBodyPartTransNode; // 0x10
+static constexpr uint64_t kPlayer_HeadNode    = 0x638;   // ITransformNode Head
+static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
-// velocity chain A (короткая) — из offset.h
-static constexpr uint64_t kPhysCCT_Off          = kPhysCCT;           // 0x200
-static constexpr uint64_t kPhysCCT_Velocity_Off = kPhysCCT_Velocity;  // 0x17C
+// velocity chain A
+static constexpr uint64_t kPhysCCT_Off          = 0x200;
+static constexpr uint64_t kPhysCCT_Velocity_Off = 0x17C;
 
-// velocity chain B (резерв) — из offset.h
-static constexpr uint64_t kMyPhysXData_Off      = kMyPhysXData;       // 0x1B80
-static constexpr uint64_t kPhxNpeononogeo_Off   = kPhxNpeononogeo;    // 0x20
+// velocity chain B (fallback)
+static constexpr uint64_t kMyPhysXData_Off      = 0x1B80;
+static constexpr uint64_t kPhxNpeononogeo_Off   = 0x20;
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        g_lock;
@@ -65,7 +63,7 @@ static inline bool validVec(const Vector3& v) {
            !(v.x == 0.f && v.y == 0.f && v.z == 0.f);
 }
 
-// Голова строго по оффсету: Player + 0x638 -> +0x10 -> Transform -> getPositionExt
+// Player + 0x638 -> BodyPart + 0x10 -> Transform -> getPositionExt
 static Vector3 HeadPos(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
 
@@ -78,11 +76,10 @@ static Vector3 HeadPos(uint64_t pawn) {
     return getPositionExt(node);
 }
 
-// Скорость цели: сначала цепочка A (0x200 -> 0x17C), потом B (0x1B80 -> 0x20 -> 0x17C)
+// Скорость цели: A (0x200 -> 0x17C), потом B (0x1B80 -> 0x20 -> 0x17C)
 static Vector3 TargetVelocity(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
 
-    // chain A
     uint64_t cct = ReadAddr<uint64_t>(pawn + kPhysCCT_Off);
     if (validPtr(cct)) {
         Vector3 v = ReadAddr<Vector3>(cct + kPhysCCT_Velocity_Off);
@@ -92,7 +89,6 @@ static Vector3 TargetVelocity(uint64_t pawn) {
         }
     }
 
-    // chain B (fallback)
     uint64_t phys = ReadAddr<uint64_t>(pawn + kMyPhysXData_Off);
     if (!validPtr(phys)) return {};
     cct = ReadAddr<uint64_t>(phys + kPhxNpeononogeo_Off);
@@ -100,7 +96,7 @@ static Vector3 TargetVelocity(uint64_t pawn) {
     return ReadAddr<Vector3>(cct + kPhysCCT_Velocity_Off);
 }
 
-// Финальное направление луча: (tPos - origin) + velocity * tFly + offsets
+// (tPos - origin) + velocity * tFly + offsets
 static Vector3 BuildRayDir(const Vector3& origin, const Vector3& tPos, const Vector3& tVel) {
     float dx   = tPos.x - origin.x;
     float dy   = tPos.y - origin.y;
@@ -205,9 +201,8 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // мгновенная запись в кадре
     Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
     Vector3 diff   = BuildRayDir(origin, tPos, tVel);
 
-    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diffVR` ↓ (200 → );
+    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
 }
