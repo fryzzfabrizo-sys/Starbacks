@@ -681,7 +681,12 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
         bool    aimVis   = getIsVisible(pawn);
         bool    espVis   = aimVis || isKnocked;
 
-        if ((isAimbot || aimsilent1 || aimMagnet) && dis <= aimDistance) {
+        // ─── Выбор цели для магнита: ближайший к центру экрана ───
+        // Приоритет: магнит (если включён), потом аимбот/silent.
+        bool magnetPicking = aimMagnet && !isAimbot && !aimsilent1;
+        bool needPick = magnetPicking || ((isAimbot || aimsilent1) && dis <= aimDistance);
+
+        if (needPick) {
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
@@ -691,7 +696,20 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix, (float)screenVpW, (float)screenVpH, (float)vw, (float)vh);
                 bool onScreen = (w2s.z > 0.001f);
 
-                if ((aimsilent1 || aimMagnet) && !isAimbot) {
+                // Для магнита — строго ближайший к центру экрана (2D)
+                if (magnetPicking) {
+                    if (onScreen) {
+                        float dx = w2s.x - center.x;
+                        float dy = w2s.y - center.y;
+                        float dSq = dx * dx + dy * dy;
+                        if (dSq < bestScore) {
+                            bestScore    = dSq;
+                            bestDistance = dis;
+                            bestTarget   = pawn;
+                            bestHeadPos  = aimPos;
+                        }
+                    }
+                } else if ((aimsilent1 || aimMagnet) && !isAimbot) {
                     float score;
                     if (onScreen) {
                         float dx = w2s.x - center.x;
@@ -783,11 +801,11 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     else
         ResetSilentAim();
 
-    // ── Aim Magnet (только в ADS) ───────────────────────────────────
+    // ── Aim Magnet (ТОЛЬКО в прицеле) ───────────────────────────────
     if (aimMagnet) {
         bool scoping = get_IsScoping(myPawn);
 
-        if (scoping) {
+        if (scoping && isVaildPtr(bestTarget)) {
             Quaternion aimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
             Vector3 camFwd = {
                 2.0f * (aimQ.x * aimQ.z + aimQ.w * aimQ.y),
