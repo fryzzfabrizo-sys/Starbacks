@@ -2,7 +2,7 @@
 // Автоматический буст CapsuleCollider врага.
 // Включается автоматически, когда включён Aim Magnet.
 // Offset'ы зафиксированы по дампу v3.
-// Размеры: 5× от дефолтных (0.48 / 1.60).
+// Размеры: 10× radius / 8× height от дефолтных.
 
 #import "collider_boost.h"
 #import "../esp/Core/GameLogic.h"
@@ -29,13 +29,13 @@ static constexpr uint64_t kManaged_NativePtr             = 0x10;
 static constexpr uint64_t kNative_RadiusOff              = 0x80;
 static constexpr uint64_t kNative_HeightOff              = 0x84;
 
-// ─── Целевые размеры: 5× от дефолтных (0.48 / 1.60) ─────
-static constexpr float kBoostRadius = 2.40f;   // 0.48 × 5
-static constexpr float kBoostHeight = 8.00f;   // 1.60 × 5
+// ─── Целевые размеры ────────────────────────────────────
+static constexpr float kBoostRadius = 4.80f;   // 0.48 × 10
+static constexpr float kBoostHeight = 12.80f;  // 1.60 × 8
 
-// Границы "здоровых" значений (расширены под 5×)
-static constexpr float kRadMin = 0.10f, kRadMax = 4.00f;
-static constexpr float kHeiMin = 0.80f, kHeiMax = 10.00f;
+// Границы "здоровых" значений (расширены)
+static constexpr float kRadMin = 0.10f, kRadMax = 8.00f;
+static constexpr float kHeiMin = 0.80f, kHeiMax = 20.00f;
 
 static constexpr int kStartupDelayMs = 3000;
 static constexpr int kTickMs         = 40;
@@ -62,7 +62,7 @@ static void LogInit(void) {
             time_t t = time(NULL);
             struct tm *tmv = localtime(&t);
             fprintf(g_logFp,
-                    "\n\n========== COLLIDER BOOST v6 (5x) %04d-%02d-%02d %02d:%02d:%02d ==========\n",
+                    "\n\n========== COLLIDER BOOST v7 (10x) %04d-%02d-%02d %02d:%02d:%02d ==========\n",
                     tmv->tm_year + 1900, tmv->tm_mon + 1, tmv->tm_mday,
                     tmv->tm_hour, tmv->tm_min, tmv->tm_sec);
             fflush(g_logFp);
@@ -87,7 +87,6 @@ static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
 
-// ─── Буст одного pawn'а ─────────────────────────────────
 static bool BoostOnePawn(uint64_t pawn, bool doLog) {
     if (!isVaildPtr(pawn)) return false;
 
@@ -121,7 +120,6 @@ static bool BoostOnePawn(uint64_t pawn, bool doLog) {
     return wrote;
 }
 
-// ─── Воркер ─────────────────────────────────────────────
 static void ColliderBoostWorker(void) {
     std::this_thread::sleep_for(std::chrono::milliseconds(kStartupDelayMs));
 
