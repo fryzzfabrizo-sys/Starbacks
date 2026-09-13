@@ -2,8 +2,7 @@
 // Автоматический буст CapsuleCollider врага.
 // Включается автоматически, когда включён Aim Magnet.
 // Offset'ы зафиксированы по дампу v3.
-//
-// Дамп: /var/mobile/Documents/collider_dump.txt
+// Размеры: 5× от дефолтных (0.48 / 1.60).
 
 #import "collider_boost.h"
 #import "../esp/Core/GameLogic.h"
@@ -21,7 +20,7 @@
 #import <Foundation/Foundation.h>
 
 extern uint64_t Moudule_Base;
-extern bool     aimMagnet;             // из esp.mm — флаг Aim Magnet
+extern bool     aimMagnet;
 extern bool     get_IsBot(uint64_t player);
 
 // ─── Точные offset'ы (из дампа v3) ──────────────────────
@@ -30,13 +29,13 @@ static constexpr uint64_t kManaged_NativePtr             = 0x10;
 static constexpr uint64_t kNative_RadiusOff              = 0x80;
 static constexpr uint64_t kNative_HeightOff              = 0x84;
 
-// ─── Целевые размеры (по твоему логу работает отлично) ──
-static constexpr float kBoostRadius = 3.00f;
-static constexpr float kBoostHeight = 6.00f;
+// ─── Целевые размеры: 5× от дефолтных (0.48 / 1.60) ─────
+static constexpr float kBoostRadius = 2.40f;   // 0.48 × 5
+static constexpr float kBoostHeight = 8.00f;   // 1.60 × 5
 
-// Границы "здоровых" значений
+// Границы "здоровых" значений (расширены под 5×)
 static constexpr float kRadMin = 0.10f, kRadMax = 4.00f;
-static constexpr float kHeiMin = 0.80f, kHeiMax = 8.00f;
+static constexpr float kHeiMin = 0.80f, kHeiMax = 10.00f;
 
 static constexpr int kStartupDelayMs = 3000;
 static constexpr int kTickMs         = 40;
@@ -63,7 +62,7 @@ static void LogInit(void) {
             time_t t = time(NULL);
             struct tm *tmv = localtime(&t);
             fprintf(g_logFp,
-                    "\n\n========== COLLIDER BOOST v5 (auto, magnet) %04d-%02d-%02d %02d:%02d:%02d ==========\n",
+                    "\n\n========== COLLIDER BOOST v6 (5x) %04d-%02d-%02d %02d:%02d:%02d ==========\n",
                     tmv->tm_year + 1900, tmv->tm_mon + 1, tmv->tm_mday,
                     tmv->tm_hour, tmv->tm_min, tmv->tm_sec);
             fflush(g_logFp);
@@ -132,7 +131,6 @@ static void ColliderBoostWorker(void) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kTickMs));
         tick++;
 
-        // Работает только при включённом Aim Magnet
         if (!aimMagnet) continue;
 
         if (Moudule_Base == (uint64_t)-1) {
