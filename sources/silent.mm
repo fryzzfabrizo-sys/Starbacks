@@ -1,5 +1,5 @@
 // silent.mm
-// Дамп CapsuleCollider цели
+// Дамп структуры HitCollider с float-интерпретацией
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -9,6 +9,7 @@
 #include <thread>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
@@ -50,9 +51,37 @@ static Vector3 HeadPos(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
     uint64_t bodyPart = ReadAddr<uint64_t>(pawn + kPlayer_HeadNode);
     if (!validPtr(bodyPart)) return {};
-    uint64_t node = ReadAddr<uint64_t>(bodyPart + kBodyPart_TransNode);
+    uint64_t node = ReadAddr<uint64_t>(pawn + kBodyPart_TransNode);
     if (!validPtr(node)) return {};
     return getPositionExt(node);
+}
+
+// Красивый дамп структуры с float-интерпретацией
+static void DumpStruct(const char* tag, uint64_t addr) {
+    if (!validPtr(addr)) return;
+
+    LogToFile("========= %s  0x%llx =========", tag,
+              (unsigned long long)addr);
+
+    for (int row = 0; row < 8; row++) {
+        uint64_t off = row * 16;
+        uint32_t v0 = ReadAddr<uint32_t>(addr + off + 0);
+        uint32_t v1 = ReadAddr<uint32_t>(addr + off + 4);
+        uint32_t v2 = ReadAddr<uint32_t>(addr + off + 8);
+        uint32_t v3 = ReadAddr<uint32_t>(addr + off + 12);
+
+        float f0, f1, f2, f3;
+        memcpy(&f0, &v0, 4);
+        memcpy(&f1, &v1, 4);
+        memcpy(&f2, &v2, 4);
+        memcpy(&f3, &v3, 4);
+
+        LogToFile("+%02llx:  %08x %08x %08x %08x",
+                  (unsigned long long)off, v0, v1, v2, v3);
+        LogToFile("       f:  %10.4f %10.4f %10.4f %10.4f",
+                  f0, f1, f2, f3);
+    }
+    LogToFile("");
 }
 
 static void SilentWorker() {
@@ -74,39 +103,34 @@ static void SilentWorker() {
             continue;
         }
 
-        // Пишем RayDir как всегда
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
 
-        // ─── Дамп коллайдера ─────────────────────────────────
+        // Дамп при изменении коллайдера
         uint64_t col = ReadAddr<uint64_t>(h + kHit_HitCollider);
         int32_t  lay = ReadAddr<int32_t>(h + kHit_ActorLayer);
 
         if (validPtr(col) && col != g_lastDumpCollider) {
             g_lastDumpCollider = col;
 
-            LogToFile("========= COLLIDER DUMP =========");
-            LogToFile("HitCollider = 0x%llx  ActorLayer=%d",
-                      (unsigned long long)col, lay);
+            char tag[64];
+            snprintf(tag, sizeof(tag), "COLLIDER layer=%d", lay);
+            DumpStruct(tag, col);
 
-            // Дамп 64 байта от начала коллайдера
-            for (int row = 0; row < 4; row++) {
-                char hex[128] = {0};
-                int pos = 0;
-                for (int j = 0; j < 4; j++) {
-                    uint32_t val = ReadAddr<uint32_t>(col + row*16 + j*4);
-                    pos += snprintf(hex + pos, sizeof(hex) - pos,
-                                    "%08x ", val);
-                }
-                LogToFile("+%02x: %s", row * 16, hex);
-            }
-            LogToFile("");
+            // Если есть указатели на +0x10, +0x20 — раскрутить их тоже
+            uint64_t p10 = ReadAddr<uint64_t>(col + 0x10);
+            uint64_t p20 = ReadAddr<uint64_t>(col + 0x20);
+
+            if (validPtr(p10))
+                DumpStruct("  +0x10 deref", p10);
+            if (validPtr(p20))
+                DumpStruct("  +0x20 deref", p20);
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
     }
 }
 
