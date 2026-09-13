@@ -1,8 +1,7 @@
 // magnet.mm
 // Aim Magnet через root transform (0x660).
-//   • работает вместе с Aimbot и Silent Aim
-//   • Y НЕ меняется — фиксируется на исходной позиции врага
-//   • displacement 4.00м — внутри бустнутого коллайдера radius=4.80
+//   • displacement 7.00м — очень широкая зона магнита
+//   • strength 0.85 — почти мгновенно притягивает
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -26,14 +25,13 @@ static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
 // ─── Параметры магнита ──────────────────────────────────
-static constexpr float kMagStrength   = 0.65f;   // 0.40 → 0.65, тянет сильнее
-static constexpr float kMagMaxDist    = 80.0f;
+static constexpr float kMagStrength   = 0.85f;   // почти мгновенно
+static constexpr float kMagMaxDist    = 150.0f;
 static constexpr float kMagMinDist    = 1.0f;
 
 // Максимальное смещение модели от серверной позиции (метры, XZ).
-// Буст-radius = 4.80. Держим 4.00 — запас 0.8м,
-// модель всегда внутри бустнутого коллайдера.
-static constexpr float kMagMaxDisplacement = 4.00f;
+// Буст-radius = 8.00. Держим 7.00 — запас 1м.
+static constexpr float kMagMaxDisplacement = 7.00f;
 
 static constexpr int   kMagTickMs     = 4;
 static constexpr int   kMagReleaseMs  = 200;
