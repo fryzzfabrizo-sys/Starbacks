@@ -1,5 +1,5 @@
 // magnet.mm
-// Aim magnet через root transform (safe world→local: root в world-фрейме)
+// Aim magnet через PhysCCT.Velocity (безопасно, не трогаем Unity transforms)
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -15,32 +15,28 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimMagnet;
 
-// ─── Player field offsets ──────────────────────────────────────────
-static constexpr uint64_t kMag_HeadNode = 0x638;   // Player_HeadTF (только чтение)
-static constexpr uint64_t kMag_RootNode = 0x660;   // Player_RootTF (сюда пишем)
-static constexpr uint64_t kMag_BodyPart = 0x10;    // ITransformNode -> Transform
-static constexpr uint64_t kT_Inner      = 0x10;
-static constexpr uint64_t kT_Matrix     = 0x38;
-static constexpr uint64_t kT_PosOff     = 0x90;
+// ─── Player -> PhysicalCCT -> Velocity ──────────────────────────────
+static constexpr uint64_t kMag_PhysCCT     = 0x200;   // kPhysCCT
+static constexpr uint64_t kMag_Velocity    = 0x17C;   // kPhysCCT_Velocity
+static constexpr uint64_t kMag_HeadNode    = 0x638;   // Player_HeadTF (только чтение)
 
 // ─── Tuning ─────────────────────────────────────────────────────────
-static constexpr float kMagStrength = 0.10f;
+static constexpr float kMagStrength = 0.50f;    // 50% от delta за тик
 static constexpr float kMagMaxDist  = 60.0f;
-static constexpr float kMagMinDist  = 0.5f;
-static constexpr int   kMagTickMs   = 16;
+static constexpr float kMagMinDist  = 0.8f;
+static constexpr int   kMagTickMs   = 16;       // 60 Hz — синхронно с физикой
+static constexpr float kMagMaxVel   = 1500.0f;  // чтобы не улетел в небо
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        mag_lock;
 static std::atomic<bool> mag_hasData{false};
 static std::atomic<bool> mag_started{false};
 
-static uint64_t mag_candidate  = 0;
-static Vector3  mag_camPos     = {};
-static Vector3  mag_camFwd     = {};
+static uint64_t mag_candidate = 0;
+static Vector3  mag_camPos    = {};
+static Vector3  mag_camFwd    = {};
 
-static uint64_t mag_locked     = 0;
-static Vector3  mag_savedLocal = {};
-static bool     mag_saved      = false;
+static uint64_t mag_locked    = 0;
 
 // ─── Utils ──────────────────────────────────────────────────────────
 static inline float vlen3(Vector3 v) { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
@@ -52,47 +48,38 @@ static inline bool isSane3(Vector3 v) {
     return true;
 }
 
-// world head pos — только чтение
+// World head pos — только чтение
 static Vector3 HeadWorld(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// Достаём указатель на matrix у root-ноды
-static uint64_t RootMatrixPtr(uint64_t pawn) {
+// Получить указатель на PhysicalCCT игрока
+static uint64_t GetCCT(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return 0;
-    uint64_t node = ReadAddr<uint64_t>(pawn + kMag_RootNode);
-    if (!isVaildPtr(node)) return 0;
-    uint64_t tf = ReadAddr<uint64_t>(node + kMag_BodyPart);
-    if (!isVaildPtr(tf)) return 0;
-    uint64_t p3 = ReadAddr<uint64_t>(tf + kT_Inner);
-    if (!isVaildPtr(p3)) return 0;
-    uint64_t mat = ReadAddr<uint64_t>(p3 + kT_Matrix);
-    return isVaildPtr(mat) ? mat : 0;
+    uint64_t cct = ReadAddr<uint64_t>(pawn + kMag_PhysCCT);
+    return isVaildPtr(cct) ? cct : 0;
 }
 
-static bool RootReadLocal(uint64_t pawn, Vector3& out) {
-    uint64_t mat = RootMatrixPtr(pawn);
-    if (!isVaildPtr(mat)) return false;
-    out = ReadAddr<Vector3>(mat + kT_PosOff);
-    return isSane3(out);
-}
-
-static bool RootWriteLocal(uint64_t pawn, Vector3 pos) {
-    if (!isSane3(pos)) return false;
-    uint64_t mat = RootMatrixPtr(pawn);
-    if (!isVaildPtr(mat)) return false;
-    WriteAddr<Vector3>(mat + kT_PosOff, pos);
+// Записать velocity
+static bool WriteVelocity(uint64_t pawn, Vector3 vel) {
+    if (!isSane3(vel)) return false;
+    uint64_t cct = GetCCT(pawn);
+    if (!isVaildPtr(cct)) return false;
+    WriteAddr<Vector3>(cct + kMag_Velocity, vel);
     return true;
 }
 
+// Обнулить velocity при отпускании
 static void ReleaseLock() {
-    if (mag_saved && isVaildPtr(mag_locked)) {
-        RootWriteLocal(mag_locked, mag_savedLocal);
+    if (isVaildPtr(mag_locked)) {
+        uint64_t cct = GetCCT(mag_locked);
+        if (isVaildPtr(cct)) {
+            WriteAddr<Vector3>(cct + kMag_Velocity, Vector3{0.f, 0.f, 0.f});
+        }
     }
     mag_locked = 0;
-    mag_saved  = false;
 }
 
 // ─── Worker ─────────────────────────────────────────────────────────
@@ -114,32 +101,29 @@ static void MagnetWorker() {
             camFwd    = mag_camFwd;
         }
 
-        // Захват
+        // Захват цели
         if (!isVaildPtr(mag_locked)) {
             mag_locked = 0;
-            mag_saved  = false;
 
             if (isVaildPtr(candidate) && get_CurHP(candidate) > 0) {
-                Vector3 lp;
-                if (RootReadLocal(candidate, lp)) {
-                    mag_locked     = candidate;
-                    mag_savedLocal = lp;
-                    mag_saved      = true;
+                // Проверяем что CCT есть
+                if (isVaildPtr(GetCCT(candidate))) {
+                    mag_locked = candidate;
                 }
             }
             if (!isVaildPtr(mag_locked)) continue;
         }
 
-        // Цель умерла / освобождена
-        if (get_CurHP(mag_locked) <= 0) {
+        // Проверка цели
+        if (get_CurHP(mag_locked) <= 0 || !isVaildPtr(GetCCT(mag_locked))) {
             ReleaseLock();
             continue;
         }
 
-        // Проверка pointer-цепочки (иначе GC крашится)
         Vector3 headW = HeadWorld(mag_locked);
         if (!isSane3(headW) || isZero3(headW)) { ReleaseLock(); continue; }
 
+        // Проекция на луч камеры
         Vector3 toHead = { headW.x - camPos.x,
                            headW.y - camPos.y,
                            headW.z - camPos.z };
@@ -149,27 +133,37 @@ static void MagnetWorker() {
         float proj = dot3(toHead, camFwd);
         if (proj < 0.5f) continue;
 
+        // Точка на луче камеры на той же глубине
         Vector3 onRay = {
             camPos.x + camFwd.x * proj,
             camPos.y + camFwd.y * proj,
             camPos.z + camFwd.z * proj
         };
 
-        // Delta от оригинала в world-фрейме → root local (у него world == local)
-        Vector3 savedWorld = mag_savedLocal;   // для root это уже world
-        Vector3 targetWorld = {
-            savedWorld.x + (onRay.x - headW.x),
-            savedWorld.y + (onRay.y - headW.y),
-            savedWorld.z + (onRay.z - headW.z)
-        };
+        // delta = куда нужно сдвинуть
+        Vector3 delta = { onRay.x - headW.x,
+                          onRay.y - headW.y,
+                          onRay.z - headW.z };
+        float dlen = vlen3(delta);
+        if (dlen < 0.05f) continue;   // цель уже на кроссхаире
 
-        Vector3 newLocal = {
-            savedWorld.x + (targetWorld.x - savedWorld.x) * kMagStrength,
-            savedWorld.y + (targetWorld.y - savedWorld.y) * kMagStrength,
-            savedWorld.z + (targetWorld.z - savedWorld.z) * kMagStrength
-        };
+        // velocity = delta / dt * strength
+        // dt = kMagTickMs / 1000
+        float dt = kMagTickMs / 1000.0f;
+        float k = kMagStrength / dt;   // например 0.5 / 0.016 = 31.25
 
-        RootWriteLocal(mag_locked, newLocal);
+        Vector3 vel = { delta.x * k, delta.y * k, delta.z * k };
+
+        // Ограничиваем скорость
+        float vlen = vlen3(vel);
+        if (vlen > kMagMaxVel) {
+            float s = kMagMaxVel / vlen;
+            vel.x *= s;
+            vel.y *= s;
+            vel.z *= s;
+        }
+
+        WriteVelocity(mag_locked, vel);
     }
 }
 
