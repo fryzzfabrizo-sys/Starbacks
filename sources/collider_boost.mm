@@ -126,21 +126,20 @@ static void ColliderBoostWorker(void) {
     std::this_thread::sleep_for(std::chrono::milliseconds(kStartupDelayMs));
 
     int tick = 0;
-    uint64_t localMatch = 0;
 
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kTickMs));
         tick++;
 
         bool enabled = ESPPrefsBool(NSSENCRYPT("BoostHitbox"), NO);
-        if (!enabled) { localMatch = 0; continue; }
+        if (!enabled) continue;
 
         if (Moudule_Base == (uint64_t)-1) {
             Moudule_Base = (uint64_t)GetGameModule_Base((char *)"FreeFire");
         }
         if (Moudule_Base == (uint64_t)-1) continue;
 
-        if (IsAtLobby(Moudule_Base)) { localMatch = 0; continue; }
+        if (IsAtLobby(Moudule_Base)) continue;
 
         uint64_t matchGame = getMatchGame(Moudule_Base);
         if (!isVaildPtr(matchGame)) continue;
@@ -153,8 +152,6 @@ static void ColliderBoostWorker(void) {
             g_loggedCount     = 0;
             CLog(@"\n=== New match 0x%llx ===", match);
         }
-
-        localMatch = match;
 
         uint64_t myPawn = getLocalPlayer(match);
         if (!isVaildPtr(myPawn) || get_CurHP(myPawn) <= 0) continue;
@@ -181,7 +178,6 @@ static void ColliderBoostWorker(void) {
             if (isLocalTeamMate(myPawn, pawn)) continue;
             if (get_CurHP(pawn) <= 0) continue;
 
-            // Логируем только первых 5 врагов в матче — чтобы не раздувать файл
             bool doLog = (g_loggedCount < 5);
             if (BoostOnePawn(pawn, doLog)) {
                 if (doLog) g_loggedCount++;
