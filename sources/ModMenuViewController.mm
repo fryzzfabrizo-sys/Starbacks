@@ -610,6 +610,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             @[ @"AIMBOT SETTINGS", @"__section__" ],
             @[ @"Auto Aimbot", @"Aimbot" ],
             @[ @"Silent Aim", @"SilentAim" ],
+            @[ @"Aim Magnet", @"AimMagnet" ],
             @[ @"Ignore Bot", @"AimIgnoreBot" ],
             @[ @"Ignore Knocked", @"AimIgnoreKnock" ],
             @[ @"Aim Line Speed", @"AimCheckVisible" ],
