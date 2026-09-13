@@ -685,7 +685,6 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
-            // NOTE: aimMagnet работает и на невидимых, чтобы вытаскивать из-за стен
             if (!isAimCheckVisible && !aimVis && !aimMagnet) valid = NO;
 
             if (valid) {
@@ -784,7 +783,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     else
         ResetSilentAim();
 
-    // ── Aim Magnet — forward из кватерниона прицеливания ───────────
+    // ── Aim Magnet ──────────────────────────────────────────────────
     if (aimMagnet) {
         bool firing = get_IsFiring(myPawn);
 
@@ -816,7 +815,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
+    self = [super init];
     if (!self) return nil;
 
     for (UIView *v in self.subviews) [v removeFromSuperview];
