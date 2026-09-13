@@ -1,6 +1,5 @@
 // remote_probe.mm
-// Remote call test: GetHp(nullptr) через thread_create_running
-// Landing pad = wfe (wait for event) — паркует поток без SIGTRAP
+// Remote call test: GetHp(localPlayer) vs direct DataPool read
 // Лог в /var/mobile/Documents/remote_probe.log
 
 #import <Foundation/Foundation.h>
@@ -15,6 +14,14 @@
 #include <cstdarg>
 #include <cstring>
 #include <unistd.h>
+
+// ─── External GameLogic functions ──────────────────────────────────
+extern uint64_t Moudule_Base;
+uint64_t getMatchGame(uint64_t);
+uint64_t getMatch(uint64_t);
+uint64_t getLocalPlayer(uint64_t);
+int get_CurHP(uint64_t);
+int get_MaxHP(uint64_t);
 
 extern int GetGameProcesspid(char*);
 extern "C" kern_return_t task_for_pid(mach_port_name_t, int, mach_port_t*);
@@ -99,46 +106,29 @@ static uint64_t FindUnityFrameworkBase() {
     return 0;
 }
 
-// ─── Remote call: один аргумент uint64, возврат uint64 ─────────────
+// ─── Remote call: 1 arg, 1 ret ──────────────────────────────────────
 static uint64_t RemoteCall1(mach_port_t task,
                             uint64_t funcAddr,
                             uint64_t arg0)
 {
-    // 1) Стек 64 KB
     uint64_t stackBase = VMAlloc(task, 65536);
-    if (!stackBase) {
-        LogToFile("[RC] stack alloc FAILED");
-        return 0;
-    }
+    if (!stackBase) { LogToFile("[RC] stack alloc FAILED"); return 0; }
 
-    // 2) SP — на верхушке, 16-байтовое выравнивание
     uint64_t sp = (stackBase + 65536 - 0x10) & ~0xFULL;
 
-    // 3) Landing pad — выделяем 0x10 байт и кладём туда wfe
     uint64_t landing = VMAlloc(task, 0x10);
-    if (!landing) {
-        LogToFile("[RC] landing alloc FAILED");
-        return 0;
-    }
+    if (!landing) { LogToFile("[RC] landing alloc FAILED"); return 0; }
 
-    // ARM64: "wfe" = wait for event. Паркует поток без сигнала.
-    // Кодирование: 0xD503205F → little-endian bytes: 5F 20 03 D5
     uint32_t wfeInsn = 0xD503205F;
     VMWrite(task, landing, &wfeInsn, 4);
 
-    // 4) Состояние потока
     arm_thread_state64_t ts;
     memset(&ts, 0, sizeof(ts));
-    ts.__x[0]  = arg0;               // X0 = Player*
-    ts.__x[1]  = 0;
-    ts.__x[2]  = 0;
-    ts.__x[3]  = 0;
+    ts.__x[0]  = arg0;
     ts.__sp    = sp;
-    ts.__lr    = landing;            // куда вернуться
-    ts.__pc    = funcAddr;           // что вызвать
-    ts.__cpsr  = 0;                  // user mode
+    ts.__lr    = landing;
+    ts.__pc    = funcAddr;
 
-    // 5) Создать поток
     thread_act_t thread;
     kern_return_t kr = thread_create_running(task,
                                              ARM_THREAD_STATE64,
@@ -150,7 +140,6 @@ static uint64_t RemoteCall1(mach_port_t task,
         return 0;
     }
 
-    // 6) Ждём до 500 мс — поток должен встать на wfe
     uint64_t result = 0;
     for (int i = 0; i < 500; i++) {
         usleep(1000);
@@ -161,12 +150,8 @@ static uint64_t RemoteCall1(mach_port_t task,
                                              (thread_state_t)&cur, &cnt);
         if (gkr != KERN_SUCCESS) break;
 
-        // На wfe PC остаётся ровно на landing (нет продвижения).
-        // Как только оказались тут — X0 уже содержит возврат из GetHp.
         if (cur.__pc == landing) {
-            // Даём CPU 5 мс дойти до wfe
             usleep(5000);
-            // Ещё раз читаем — на случай если PC сдвинулся
             cnt = ARM_THREAD_STATE64_COUNT;
             thread_get_state(thread, ARM_THREAD_STATE64,
                              (thread_state_t)&cur, &cnt);
@@ -175,20 +160,16 @@ static uint64_t RemoteCall1(mach_port_t task,
         }
     }
 
-    // 7) Убиваем поток
     thread_terminate(thread);
-
-    // 8) Освобождаем память
     vm_deallocate(task, (vm_address_t)stackBase, 65536);
     vm_deallocate(task, (vm_address_t)landing,   0x10);
-
     return result;
 }
 
-// ─── Публичный entry point ──────────────────────────────────────────
+// ─── Entry ──────────────────────────────────────────────────────────
 extern "C" void ProbeRemote() {
     remove(kLogPath);
-    LogToFile("========== REMOTE CALL TEST ==========");
+    LogToFile("========== REMOTE CALL TEST 2 ==========");
 
     int pid = GetGameProcesspid((char*)"FreeFire");
     if (pid <= 0) { LogToFile("[PROBE] pid not found"); return; }
@@ -203,13 +184,36 @@ extern "C" void ProbeRemote() {
     uint64_t base = FindUnityFrameworkBase();
     if (!base) { LogToFile("[PROBE] unity base NOT found"); return; }
 
+    LogToFile("[RC] Moudule_Base = 0x%llx", (unsigned long long)Moudule_Base);
+
+    uint64_t matchGame = getMatchGame(Moudule_Base);
+    LogToFile("[RC] matchGame = 0x%llx", (unsigned long long)matchGame);
+    if (!matchGame) { LogToFile("[RC] no match — enter a game"); return; }
+
+    uint64_t match = getMatch(matchGame);
+    LogToFile("[RC] match = 0x%llx", (unsigned long long)match);
+    if (!match) { LogToFile("[RC] no match ptr"); return; }
+
+    uint64_t localPlayer = getLocalPlayer(match);
+    LogToFile("[RC] localPlayer = 0x%llx", (unsigned long long)localPlayer);
+    if (!localPlayer) { LogToFile("[RC] no local player"); return; }
+
+    int hpDirect    = get_CurHP(localPlayer);
+    int hpMaxDirect = get_MaxHP(localPlayer);
+    LogToFile("[RC] direct: HP = %d / %d", hpDirect, hpMaxDirect);
+
     uint64_t getHpAddr = base + 0x543592C;
     LogToFile("[RC] GetHp addr = 0x%llx", (unsigned long long)getHpAddr);
 
-    LogToFile("[RC] calling GetHp(nullptr)...");
-    uint64_t res = RemoteCall1(gTask, getHpAddr, 0);
-    LogToFile("[RC] GetHp(nullptr) = %llu (0x%llx)",
-              (unsigned long long)res, (unsigned long long)res);
+    uint64_t hpRemote = RemoteCall1(gTask, getHpAddr, localPlayer);
+    LogToFile("[RC] remote: GetHp(localPlayer) = %lld", (long long)hpRemote);
+
+    if ((int)hpRemote == hpDirect) {
+        LogToFile("[RC] *** MATCH — REMOTE CALL WORKS ***");
+    } else {
+        LogToFile("[RC] mismatch: direct=%d remote=%lld",
+                  hpDirect, (long long)hpRemote);
+    }
 
     LogToFile("========== DONE ==========");
     LogToFile("");
