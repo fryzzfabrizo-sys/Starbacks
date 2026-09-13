@@ -16,12 +16,10 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// ─── Offsets Player ─────────────────────────────────────────────────
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;
 static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
-// ─── Offsets HitInfo (GMPGMPFNMFP) — читаем ВСЕ поля ────────────────
 static constexpr uint64_t HI_klass           = 0x00;
 static constexpr uint64_t HI_monitor         = 0x08;
 static constexpr uint64_t HI_m_IsInPool      = 0x10;
@@ -42,7 +40,6 @@ static constexpr uint64_t HI_OrigStartPos    = 0x74;
 static constexpr uint64_t HI_SpecialHitType  = 0x80;
 static constexpr uint64_t HI_SpecialHitObjID = 0x84;
 
-// ─── State ──────────────────────────────────────────────────────────
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
@@ -53,7 +50,6 @@ static uint64_t          g_lastMatch = 0;
 static uint64_t g_lastLoggedCollider = 0;
 static int      g_lastLoggedDamage   = -1;
 
-// ─── Helpers ────────────────────────────────────────────────────────
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
@@ -80,7 +76,6 @@ static void LogLine(const char* fmt, ...) {
     fclose(f);
 }
 
-// ─── Dump HitInfo ───────────────────────────────────────────────────
 static void DumpHitInfo(uint64_t h, uint64_t target, const Vector3& tPos) {
     if (!validPtr(h)) return;
 
@@ -104,10 +99,9 @@ static void DumpHitInfo(uint64_t h, uint64_t target, const Vector3& tPos) {
     uint8_t  specHitType  = ReadAddr<uint8_t> (h + HI_SpecialHitType);
     uint32_t specHitObjID = ReadAddr<uint32_t>(h + HI_SpecialHitObjID);
 
-    // Логируем только когда есть активность (damage > 0 или сменился collider)
     if (damage <= 0 && hitCollider == g_lastLoggedCollider) return;
     g_lastLoggedCollider = hitCollider;
-    g_lastDamage = damage;
+    g_lastLoggedDamage   = damage;
 
     LogLine("========== HITINFO DUMP ==========");
     LogLine("target        = 0x%llx   head=(%.2f, %.2f, %.2f)",
@@ -136,7 +130,6 @@ static void DumpHitInfo(uint64_t h, uint64_t target, const Vector3& tPos) {
     LogLine("");
 }
 
-// ─── Worker ─────────────────────────────────────────────────────────
 static void SilentWorker() {
     while (true) {
         if (!g_hasData.load(std::memory_order_acquire)) {
@@ -158,14 +151,12 @@ static void SilentWorker() {
             continue;
         }
 
-        // Пишем RayDir (как раньше)
         Vector3 origin = ReadAddr<Vector3>(h + HI_StartPosition);
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
         WriteAddr<Vector3>(h + HI_RayDir, diff);
 
-        // Дамп
         DumpHitInfo(h, target, tPos);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
