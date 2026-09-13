@@ -1,35 +1,35 @@
 // silent.mm
-// Silent aim + запись HitCollider для попаданий через стены
+// Silent aim + диагностика путей до HeadCollider
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
-#import "../esp/drawing_view/offset.h"
 #import "mahoa.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
 #include <cmath>
+#include <chrono>
+#include <cstdio>
 
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// ─── Offsets ────────────────────────────────────────────────────────
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
+static constexpr uint64_t kHit_RayDir         = 0x40;
+static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;
 static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
-// HitInfo offsets
-static constexpr uint64_t kHit_GameObject     = 0x18;
+// диагностические пути
+static constexpr uint64_t kPlayer_AimCollider = 0x6C8;
+static constexpr uint64_t kPlayer_LockAimCol  = 0x140;
+static constexpr uint64_t kPlayer_FollowCam   = 0x620;
+static constexpr uint64_t kPlayer_Attributes  = 0x700;
 static constexpr uint64_t kHit_HeadCollider   = 0x20;
 static constexpr uint64_t kHit_HitLoc         = 0x28;
-static constexpr uint64_t kHit_RayDir         = 0x40;
-static constexpr uint64_t kHit_StartPos       = 0x4C;
-
-// Пути к коллайдеру цели на Player
-static constexpr uint64_t kPlayer_AimCollider = 0x6C8;   // AimCollider_Ptr
-static constexpr uint64_t kPlayer_LockAimCol  = 0x140;   // LockAimCollider_Backing
+static constexpr uint64_t kHit_GameObject     = 0x18;
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        g_lock;
@@ -37,8 +37,10 @@ static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
 static uint64_t          g_aimPtr    = 0;
 static Vector3           g_tPos      = {};
-static uint64_t          g_collider  = 0;
 static uint64_t          g_lastMatch = 0;
+
+static std::chrono::steady_clock::time_point g_lastLog =
+    std::chrono::steady_clock::now();
 
 // ─── Helpers ────────────────────────────────────────────────────────
 static inline bool validPtr(uint64_t p) {
@@ -59,17 +61,15 @@ static Vector3 HeadPos(uint64_t pawn) {
     return getPositionExt(node);
 }
 
-// Достаём head collider цели (пробуем оба оффсета)
-static uint64_t TargetCollider(uint64_t pawn) {
-    if (!validPtr(pawn)) return 0;
-
-    uint64_t c = ReadAddr<uint64_t>(pawn + kPlayer_AimCollider);
-    if (validPtr(c)) return c;
-
-    c = ReadAddr<uint64_t>(pawn + kPlayer_LockAimCol);
-    if (validPtr(c)) return c;
-
-    return 0;
+static void LogLine(const char* fmt, ...) {
+    FILE* f = fopen("/var/mobile/Documents/sa_diag.log", "a");
+    if (!f) return;
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(f, fmt, args);
+    va_end(args);
+    fputc('\n', f);
+    fclose(f);
 }
 
 // ─── Worker ─────────────────────────────────────────────────────────
@@ -80,13 +80,13 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h, col;
+        uint64_t h, target;
         Vector3  tPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h    = g_aimPtr;
-            tPos = g_tPos;
-            col  = g_collider;
+            h      = g_aimPtr;
+            tPos   = g_tPos;
+            target = g_SilentBestTarget;
         }
 
         if (!validPtr(h) || !validVec(tPos)) {
@@ -94,21 +94,48 @@ static void SilentWorker() {
             continue;
         }
 
+        // Пишем только RayDir (рабочий вариант)
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
-
-        // 1. RayDir — основное (для видимых)
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
 
-        // 2. HitLocation — куда попали (world)
-        WriteAddr<Vector3>(h + kHit_HitLoc, tPos);
+        // ── Диагностика: раз в 500 мс ──────────────────────────────
+        auto now = std::chrono::steady_clock::now();
+        auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now - g_lastLog).count();
+        if (ms < 500) continue;
+        g_lastLog = now;
 
-        // 3. HitCollider — прямая ссылка на коллайдер цели (для стен)
-        if (validPtr(col)) {
-            WriteAddr<uint64_t>(h + kHit_HeadCollider, col);
-        }
+        if (!validPtr(target)) continue;
+
+        uint64_t c6C8       = ReadAddr<uint64_t>(target + kPlayer_AimCollider);
+        uint64_t c140       = ReadAddr<uint64_t>(target + kPlayer_LockAimCol);
+        uint64_t c6C8_10    = validPtr(c6C8) ? ReadAddr<uint64_t>(c6C8 + 0x10) : 0;
+        uint64_t c6C8_18    = validPtr(c6C8) ? ReadAddr<uint64_t>(c6C8 + 0x18) : 0;
+        uint64_t c140_10    = validPtr(c140) ? ReadAddr<uint64_t>(c140 + 0x10) : 0;
+        uint64_t fc         = ReadAddr<uint64_t>(target + kPlayer_FollowCam);
+        uint64_t attrs      = ReadAddr<uint64_t>(target + kPlayer_Attributes);
+        uint64_t attrs_140  = validPtr(attrs) ? ReadAddr<uint64_t>(attrs + 0x140) : 0;
+
+        // HitInfo текущий (эталон — сюда игра пишет сама при реальном попадании)
+        uint64_t hiCol      = ReadAddr<uint64_t>(h + kHit_HeadCollider);
+        uint64_t hiGO       = ReadAddr<uint64_t>(h + kHit_GameObject);
+        Vector3  hiLoc      = ReadAddr<Vector3>(h + kHit_HitLoc);
+
+        LogLine("[SA-DIAG] tgt=0x%llx  hitInfo=0x%llx", target, h);
+        LogLine("  HI.Col      = 0x%llx   <-- ЭТАЛОН", hiCol);
+        LogLine("  HI.GameObj  = 0x%llx", hiGO);
+        LogLine("  HI.HitLoc   = (%.2f, %.2f, %.2f)", hiLoc.x, hiLoc.y, hiLoc.z);
+        LogLine("  Player+6C8  = 0x%llx", c6C8);
+        LogLine("  Player+140  = 0x%llx", c140);
+        LogLine("  6C8+10      = 0x%llx", c6C8_10);
+        LogLine("  6C8+18      = 0x%llx", c6C8_18);
+        LogLine("  140+10      = 0x%llx", c140_10);
+        LogLine("  Player+620  = 0x%llx", fc);
+        LogLine("  Attrs+140   = 0x%llx", attrs_140);
+        LogLine("  ---");
     }
 }
 
@@ -121,12 +148,10 @@ void InitSilentAimThread() {
 void ResetSilentAim() {
     g_hasData.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lk(g_lock);
-    g_aimPtr   = 0;
-    g_tPos     = {};
-    g_collider = 0;
+    g_aimPtr = 0;
+    g_tPos   = {};
 }
 
-// ─── Main ───────────────────────────────────────────────────────────
 void RunSilentAim() {
     InitSilentAimThread();
 
@@ -162,13 +187,10 @@ void RunSilentAim() {
         return;
     }
 
-    uint64_t collider = TargetCollider(target);
-
     {
         std::lock_guard<std::mutex> lk(g_lock);
-        g_aimPtr   = aimPtr;
-        g_tPos     = tPos;
-        g_collider = collider;
+        g_aimPtr = aimPtr;
+        g_tPos   = tPos;
     }
     g_hasData.store(true, std::memory_order_release);
 
@@ -176,10 +198,5 @@ void RunSilentAim() {
     Vector3 diff   = { tPos.x - origin.x,
                        tPos.y - origin.y,
                        tPos.z - origin.z };
-
     WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
-    WriteAddr<Vector3>(aimPtr + kHit_HitLoc, tPos);
-    if (validPtr(collider)) {
-        WriteAddr<uint64_t>(aimPtr + kHit_HeadCollider, collider);
-    }
 }
