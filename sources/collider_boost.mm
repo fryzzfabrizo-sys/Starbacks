@@ -24,13 +24,13 @@ static constexpr uint64_t kManaged_NativePtr             = 0x10;
 static constexpr uint64_t kNative_RadiusOff              = 0x80;
 static constexpr uint64_t kNative_HeightOff              = 0x84;
 
-// ─── Максимальные рабочие значения ──────────────────────
-static constexpr float kBoostRadius = 12.00f;
-static constexpr float kBoostHeight = 25.00f;
+// ─── Размеры ────────────────────────────────────────────
+static constexpr float kBoostRadius = 18.00f;
+static constexpr float kBoostHeight = 35.00f;
 
 // Границы "здоровых" значений
-static constexpr float kRadMin = 0.10f, kRadMax = 20.00f;
-static constexpr float kHeiMin = 0.80f, kHeiMax = 50.00f;
+static constexpr float kRadMin = 0.10f, kRadMax = 30.00f;
+static constexpr float kHeiMin = 0.80f, kHeiMax = 70.00f;
 
 static constexpr int kStartupDelayMs = 3000;
 static constexpr int kTickMs         = 40;
