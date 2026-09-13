@@ -35,7 +35,7 @@ static inline bool validPtr(uint64_t p) {
 }
 
 static void DumpNative(uint64_t addr, const char* tag) {
-    LogToFile:;
+    
     LogLine("========= %s  addr=0x%llx =========",
             tag, (unsigned long long)addr);
 
