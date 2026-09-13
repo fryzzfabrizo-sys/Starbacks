@@ -1,9 +1,9 @@
 // collider_boost.mm
-// Увеличение CapsuleCollider врага.
+// Автоматический буст CapsuleCollider врага.
+// Включается автоматически, когда включён Aim Magnet.
 // Offset'ы зафиксированы по дампу v3.
 //
 // Дамп: /var/mobile/Documents/collider_dump.txt
-// Ключ префа:  "BoostHitbox"
 
 #import "collider_boost.h"
 #import "../esp/Core/GameLogic.h"
@@ -21,18 +21,20 @@
 #import <Foundation/Foundation.h>
 
 extern uint64_t Moudule_Base;
-extern bool get_IsBot(uint64_t player);
+extern bool     aimMagnet;             // из esp.mm — флаг Aim Magnet
+extern bool     get_IsBot(uint64_t player);
 
 // ─── Точные offset'ы (из дампа v3) ──────────────────────
-static constexpr uint64_t kPlayer_CapsuleColliderManaged = 0xAB0; // pawn → managed CapsuleCollider
-static constexpr uint64_t kManaged_NativePtr             = 0x10;  // managed → native Unity-объект
-static constexpr uint64_t kNative_RadiusOff              = 0x80;  // native + 0x80 = radius
-static constexpr uint64_t kNative_HeightOff              = 0x84;  // native + 0x84 = height
+static constexpr uint64_t kPlayer_CapsuleColliderManaged = 0xAB0;
+static constexpr uint64_t kManaged_NativePtr             = 0x10;
+static constexpr uint64_t kNative_RadiusOff              = 0x80;
+static constexpr uint64_t kNative_HeightOff              = 0x84;
 
+// ─── Целевые размеры (по твоему логу работает отлично) ──
 static constexpr float kBoostRadius = 3.00f;
 static constexpr float kBoostHeight = 6.00f;
 
-// Границы "здоровых" значений — защита от мусора
+// Границы "здоровых" значений
 static constexpr float kRadMin = 0.10f, kRadMax = 4.00f;
 static constexpr float kHeiMin = 0.80f, kHeiMax = 8.00f;
 
@@ -61,7 +63,7 @@ static void LogInit(void) {
             time_t t = time(NULL);
             struct tm *tmv = localtime(&t);
             fprintf(g_logFp,
-                    "\n\n========== COLLIDER BOOST v4 %04d-%02d-%02d %02d:%02d:%02d ==========\n",
+                    "\n\n========== COLLIDER BOOST v5 (auto, magnet) %04d-%02d-%02d %02d:%02d:%02d ==========\n",
                     tmv->tm_year + 1900, tmv->tm_mon + 1, tmv->tm_mday,
                     tmv->tm_hour, tmv->tm_min, tmv->tm_sec);
             fflush(g_logFp);
@@ -130,8 +132,8 @@ static void ColliderBoostWorker(void) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kTickMs));
         tick++;
 
-        bool enabled = ESPPrefsBool(NSSENCRYPT("BoostHitbox"), NO);
-        if (!enabled) continue;
+        // Работает только при включённом Aim Magnet
+        if (!aimMagnet) continue;
 
         if (Moudule_Base == (uint64_t)-1) {
             Moudule_Base = (uint64_t)GetGameModule_Base((char *)"FreeFire");
