@@ -4,7 +4,8 @@
 
 #import <Foundation/Foundation.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
+#include <mach/vm_map.h>
+#include <mach/vm_region.h>
 #include <mach-o/loader.h>
 #include <mach-o/fat.h>
 #include <cstdio>
@@ -30,29 +31,38 @@ static void LogToFile(const char* fmt, ...) {
     fclose(f);
 }
 
+// ─── Обёртки над vm_* API ───────────────────────────────────────────
+static bool VMRead(mach_port_t task, uint64_t addr, void* out, size_t size) {
+    vm_size_t outSize = 0;
+    kern_return_t kr = vm_read_overwrite(task,
+                                         (vm_address_t)addr,
+                                         (vm_size_t)size,
+                                         (vm_address_t)out,
+                                         &outSize);
+    return kr == KERN_SUCCESS && outSize == size;
+}
+
 // ─── Найти базу UnityFramework через region scan ────────────────────
 static uint64_t FindUnityFrameworkBase() {
     if (gUnityBase) return gUnityBase;
     if (gTask == MACH_PORT_NULL) return 0;
 
-    mach_vm_address_t addr = 0x100000000ULL;
-    mach_vm_size_t    size = 0;
+    vm_address_t addr = 0x100000000ULL;
+    vm_size_t    size = 0;
     vm_region_basic_info_data_64_t info;
     mach_msg_type_number_t infoCnt = VM_REGION_BASIC_INFO_COUNT_64;
     mach_port_t objectName = MACH_PORT_NULL;
 
     while (1) {
-        kern_return_t kr = mach_vm_region(gTask, &addr, &size, VM_REGION_BASIC_INFO_64,
-                                          (vm_region_info_t)&info, &infoCnt, &objectName);
+        kern_return_t kr = vm_region_64(gTask, &addr, &size, VM_REGION_BASIC_INFO_64,
+                                        (vm_region_info_t)&info, &infoCnt, &objectName);
         if (kr != KERN_SUCCESS) break;
 
         uint32_t magic = 0;
-        mach_vm_size_t read = 0;
-        if (mach_vm_read_overwrite(gTask, addr, 4, (mach_vm_address_t)&magic, &read) == KERN_SUCCESS) {
+        if (VMRead(gTask, addr, &magic, 4)) {
             if (magic == 0xFEEDFACF) {
                 struct mach_header_64 hdr;
-                if (mach_vm_read_overwrite(gTask, addr, sizeof(hdr),
-                    (mach_vm_address_t)&hdr, &read) == KERN_SUCCESS) {
+                if (VMRead(gTask, addr, &hdr, sizeof(hdr))) {
                     if (size > 100ULL * 1024ULL * 1024ULL) {
                         gUnityBase = addr;
                         LogToFile("[PROBE] UnityFramework base = 0x%llx (size=%llu)",
@@ -72,11 +82,8 @@ static void DumpCode(uint64_t absAddr, uint64_t len) {
     if (gTask == MACH_PORT_NULL) return;
     uint8_t buf[64] = {0};
     if (len > 64) len = 64;
-    mach_vm_size_t read = 0;
-    kern_return_t kr = mach_vm_read_overwrite(gTask, absAddr, len,
-                                              (mach_vm_address_t)buf, &read);
-    if (kr != KERN_SUCCESS) {
-        LogToFile("[PROBE] read 0x%llx FAILED kr=%d", (unsigned long long)absAddr, kr);
+    if (!VMRead(gTask, absAddr, buf, (size_t)len)) {
+        LogToFile("[PROBE] read 0x%llx FAILED", (unsigned long long)absAddr);
         return;
     }
     char hex[256] = {0};
@@ -89,7 +96,6 @@ static void DumpCode(uint64_t absAddr, uint64_t len) {
 
 // ─── Публичный entry point ──────────────────────────────────────────
 extern "C" void ProbeRemote() {
-    // Очистить старый лог при старте
     remove(kLogPath);
 
     LogToFile("========== PROBE START ==========");
