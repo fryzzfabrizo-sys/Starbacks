@@ -1,5 +1,5 @@
 // magnet.mm
-// Aim Magnet — быстрый тик, жёсткая привязка, авто-релиз по таймауту
+// Aim Magnet через root transform. camFwd из aim rotation. Absolute write.
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -16,10 +16,11 @@ extern uint64_t cachedMatch;
 extern bool     aimMagnet;
 
 // ═══════════════════════════════════════════════════════════════════
-//  РЕЖИМ
-//  0 = root (0x660)   1 = head (0x638)
+//  РЕЖИМЫ
+//  0 = писать в ROOT (0x660) absolute
+//  1 = писать в HEAD (0x638) absolute
 // ═══════════════════════════════════════════════════════════════════
-static constexpr int kMagMode = 0;
+static constexpr int kMagWriteNode = 0;
 
 // ─── Offsets ────────────────────────────────────────────────────────
 static constexpr uint64_t kMag_HeadNode = 0x638;
@@ -30,13 +31,12 @@ static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
 // ─── Tuning ─────────────────────────────────────────────────────────
-static constexpr float kMagStrength    = 0.55f;    // ↑↑ против анимации
-static constexpr float kMagHeadOffset  = 1.5f;
-static constexpr float kMagMaxDist     = 80.0f;
-static constexpr float kMagMinDist     = 0.6f;
-static constexpr int   kMagTickMs      = 8;        // 120 Hz — быстрее кадра
-static constexpr float kMagMaxDelta    = 1.50f;    // ↑↑ больше шаг
-static constexpr int   kMagReleaseMs   = 200;      // если нет данных — релиз
+static constexpr float kMagStrength   = 0.35f;
+static constexpr float kMagHeadOffset = 1.5f;
+static constexpr float kMagMaxDist    = 80.0f;
+static constexpr float kMagMinDist    = 1.0f;
+static constexpr int   kMagTickMs     = 12;      // ~80 Hz — быстрее анимации 60 Hz
+static constexpr int   kMagReleaseMs  = 200;     // авто-релиз если нет данных
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        mag_lock;
@@ -87,13 +87,6 @@ static uint64_t MatPtr(uint64_t pawn, uint64_t nodeOff) {
     return isVaildPtr(mat) ? mat : 0;
 }
 
-static bool ReadLocalAt(uint64_t pawn, uint64_t nodeOff, Vector3& out) {
-    uint64_t mat = MatPtr(pawn, nodeOff);
-    if (!isVaildPtr(mat)) return false;
-    out = ReadAddr<Vector3>(mat + kMag_PosOff);
-    return isSane3(out);
-}
-
 static bool WriteLocalAt(uint64_t pawn, uint64_t nodeOff, Vector3 pos) {
     if (!isSane3(pos)) return false;
     uint64_t mat = MatPtr(pawn, nodeOff);
@@ -102,59 +95,41 @@ static bool WriteLocalAt(uint64_t pawn, uint64_t nodeOff, Vector3 pos) {
     return true;
 }
 
-// ─── Core step ──────────────────────────────────────────────────────
-static bool ComputeMagnetStep(uint64_t pawn,
-                              const Vector3& camPos,
-                              const Vector3& camFwd,
-                              Vector3& outTargetLocal)
-{
+// ─── Core ───────────────────────────────────────────────────────────
+static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& camFwd) {
     Vector3 headW = HeadWorld(pawn);
     if (!isSane3(headW) || isZero3(headW)) return false;
 
     float dist = vlen3({headW.x - camPos.x, headW.y - camPos.y, headW.z - camPos.z});
     if (dist < kMagMinDist || dist > kMagMaxDist) return false;
 
+    // точка на луче камеры на той же глубине, что и голова
     Vector3 targetPt = {
         camPos.x + camFwd.x * dist,
         camPos.y + camFwd.y * dist,
         camPos.z + camFwd.z * dist
     };
+
+    // root должен быть на headOffset ниже головы
     Vector3 rootTgtWorld = {
         targetPt.x,
         targetPt.y - kMagHeadOffset,
         targetPt.z
     };
 
-    Vector3 curRootWorld = RootWorld(pawn);
-    if (!isSane3(curRootWorld) || isZero3(curRootWorld)) return false;
+    // текущий root в world
+    Vector3 curRootW = RootWorld(pawn);
+    if (!isSane3(curRootW) || isZero3(curRootW)) return false;
 
-    Vector3 deltaWorld = {
-        rootTgtWorld.x - curRootWorld.x,
-        rootTgtWorld.y - curRootWorld.y,
-        rootTgtWorld.z - curRootWorld.z
+    // lerp между текущим и целевым в world
+    Vector3 lerped = {
+        curRootW.x + (rootTgtWorld.x - curRootW.x) * kMagStrength,
+        curRootW.y + (rootTgtWorld.y - curRootW.y) * kMagStrength,
+        curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
     };
 
-    Vector3 curLocal;
-    if (!ReadLocalAt(pawn, kMag_RootNode, curLocal)) return false;
-
-    Vector3 step = {
-        deltaWorld.x * kMagStrength,
-        deltaWorld.y * kMagStrength,
-        deltaWorld.z * kMagStrength
-    };
-
-    float slen = vlen3(step);
-    if (slen > kMagMaxDelta) {
-        float s = kMagMaxDelta / slen;
-        step.x *= s; step.y *= s; step.z *= s;
-    }
-
-    outTargetLocal = {
-        curLocal.x + step.x,
-        curLocal.y + step.y,
-        curLocal.z + step.z
-    };
-    return true;
+    // пишем абсолютную world-позицию в local root (root обычно top of hierarchy)
+    return WriteLocalAt(pawn, kMag_RootNode, lerped);
 }
 
 // ─── Worker ─────────────────────────────────────────────────────────
@@ -162,7 +137,7 @@ static void MagnetWorker() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kMagTickMs));
 
-        // Авто-релиз: если давно не было данных — отпускаем цель
+        // авто-релиз по таймауту
         auto now = std::chrono::steady_clock::now();
         auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
                         now - mag_lastUpdate).count();
@@ -197,14 +172,7 @@ static void MagnetWorker() {
             continue;
         }
 
-        Vector3 newLocal;
-        if (!ComputeMagnetStep(mag_locked, camPos, camFwd, newLocal)) continue;
-
-        if (kMagMode == 1) {
-            WriteLocalAt(mag_locked, kMag_HeadNode, newLocal);
-        } else {
-            WriteLocalAt(mag_locked, kMag_RootNode, newLocal);
-        }
+        ApplyMagnet(mag_locked, camPos, camFwd);
     }
 }
 
@@ -217,7 +185,6 @@ void InitMagnetThread() {
 void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward, bool isFiring) {
     InitMagnetThread();
 
-    // Если не стреляем или нет цели — сразу стоп
     if (!aimMagnet || !isFiring || !isVaildPtr(target)) {
         mag_hasData.store(false, std::memory_order_release);
         return;
