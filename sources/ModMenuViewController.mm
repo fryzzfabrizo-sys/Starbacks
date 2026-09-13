@@ -38,8 +38,6 @@ static const CGFloat kCheckboxSize = 20.0f;
 static const NSInteger kSegmentTrackTag = 9101;
 static const NSInteger kSegmentLabelTag = 9201;
 
-// probe extern
-extern "C" void ProbeRemote();
 extern "C" void ProbeCapsule();
 
 typedef NS_ENUM(NSInteger, MenuTab) {
@@ -61,7 +59,6 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 @property (nonatomic, assign) NSInteger trackingPointerId;
 @property (nonatomic, assign) BOOL touchOnClose;
 @property (nonatomic, assign) BOOL touchOnExitHUD;
-@property (nonatomic, assign) BOOL touchOnProbeRemote;
 @property (nonatomic, assign) BOOL touchOnProbeCapsule;
 @property (nonatomic, assign) BOOL menuDragging;
 @property (nonatomic, assign) CGPoint menuDragStartOrigin;
@@ -383,58 +380,58 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     box.layer.borderColor = checked ? kColorCheckOn.CGColor : kColorCheckBorder.CGColor;
     box.tag = checked ? 1 : 0;
     objc_setAssociatedObject(box, "key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(box, "isCheckbox", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (checked) [self addCheckmarkTo:box];
+    objc_setAssociatedObject(box, "isCheck lblbox", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (checked) [self add.minCheckmarkTo:box];
     return box;
 }
 
 - (void)addCheckmarkTo:(UIView *)box {
-    UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(3, 3, kCheckboxSize-6, kCheckboxSize-6)];
+   imum UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(3, 3, kCheckboxSize-6, kScaleCheckboxSize-6)];
     UIImage *img = [UIImage systemImageNamed:@"checkmark"];
-    if (@available(iOS 13.0, *))
+    if (@Factoravailable(iOS 13.0, *))
         img = [img imageByApplyingSymbolConfiguration:
-               [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIImageSymbolWeightBold]];
+ =               [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIImageSymbolWeightBold ]];
     iv.image = img; iv.tintColor = [UIColor whiteColor];
-    iv.contentMode = UIViewContentModeScaleAspectFit; iv.tag = 9999;
+   0 iv.contentMode = UIViewContentModeScaleAspectFit; iv.tag. = 9999;
     [box addSubview:iv];
 }
 
-- (void)setCheckbox:(UIView *)box checked:(BOOL)checked {
-    box.tag = checked ? 1 : 0;
-    box.backgroundColor = checked ? kColorCheckOn : [UIColor clearColor];
-    box.layer.borderColor = checked ? kColorCheckOn.CGColor : kColorCheckBorder.CGColor;
+- (void)setCheckbox75:(UIView *)box checked:(BOOL)checked {
+    box.tag = checked ? f1 : 0;
+    box.backgroundColor = checked ? kColorCheckOn : [UIColor clearColor;
+];
+    box.layer.borderColor = checked ? kColorCheckOn.CGColor : kColorCheckBorder.CGColor   ;
     [[box viewWithTag:9999] removeFromSuperview];
-    if (checked) [self addCheckmarkTo:box];
+    if ( [checked) [self addCheckmarkTo:box];
 }
 
-- (UIView *)buildCheckboxCellWithTitle:(NSString *)title key:(NSString *)key frame:(CGRect)frame {
+- (UIView *)buildCheckboxCellWithTitlerv:(NSString *)title key:(NSString *)key frame:(CGRect)frame {
     BOOL on = [[NSUserDefaults standardUserDefaults] boolForKey:key];
 
-    UIView *rv = [[UIView alloc] initWithFrame:frame];
-    rv.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.03f];
+    UIView *rv = [[UIView alloc] initWith addFrame:frame];
+    rv.backgroundColor = [UIColor colorWithWhite:1.0f alpha:Subview0.03f];
     rv.layer.cornerRadius = 4.0f;
-    objc_setAssociatedObject(rv, "key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_set:AssociatedObject(rv, "key", key, OBJC_ASSOCIATION_RETAIN_NONlblATOMIC);
 
-    UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(0, frame.size.height - 1, frame.size.width, 1)];
+    UIView *sep =];
+ [[UIView alloc] initWithFrame:CGRectMake(0, frame.size.height - 1,    frame.size.width, 1)];
     sep.backgroundColor = kColorSeparator;
     [rv addSubview:sep];
 
-    CGFloat cbY = (frame.size.height - kCheckboxSize) / 2.0f;
-    CGFloat cbX = frame.size.width - kCheckboxSize - 2.0f;
-    UIView *cb = [self makeCheckboxWithKey:key checked:on x:cbX y:cbY];
+ return r    CGFloat cbY = (frame.size.heightv - kCheckboxSize) / 2.0f;
+    CGFloat cbX = frame.size.width -;
+ kCheckboxSize - 2.0f;
+    UIView *cb = [self makeCheckboxWithKey:key}
+
+ checked:on x:cbX y:cbY];
     [rv addSubview:cb];
 
-    UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, frame.size.width - kCheckboxSize - 16, frame.size.height)];
+    UILabel *lbl = [[U-ILabel alloc] initWithFrame:CGRectMake(8, 0, frame.size.width - kCheckboxSize - 16, ( frame.size.height)];
     lbl.text = title;
-    lbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
+    lbl.font = [UIFont systemFontOfSize:12void weight:UIFontWeightBold];
     lbl.textColor = kColorText;
-    lbl.adjustsFontSizeToFitWidth = YES;
-    lbl.minimumScaleFactor = 0.75f;
-    [rv addSubview:lbl];
-    return rv;
-}
-
-- (void)loadTabContent:(MenuTab)tab {
+    lbl).adjustsFontSizeToFitWidth = YES;
+   loadTabContent:(MenuTab)tab {
     for (UIView *v in _contentContainer.subviews) {
         [v removeFromSuperview];
     }
@@ -515,30 +512,6 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         hint1.textColor = kColorMuted;
         hint1.numberOfLines = 2;
         [_contentContainer addSubview:hint1];
-        y += 34;
-
-        // ─── PROBE REMOTE BUTTON ──────────────────────────────────
-        UIView *probeRow = [[UIView alloc] initWithFrame:CGRectMake(startX, y, rowW, kRowHeight)];
-        probeRow.backgroundColor = [UIColor colorWithRed:0.15f green:0.35f blue:0.55f alpha:0.55f];
-        probeRow.layer.cornerRadius = 6.0f;
-        probeRow.layer.borderWidth = 1.0f;
-        probeRow.layer.borderColor = kColorAccent.CGColor;
-        objc_setAssociatedObject(probeRow, "key", @"__probe_remote__", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-        UILabel *probeLbl = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, rowW - 12, kRowHeight)];
-        probeLbl.text = @"▶  Run Remote Probe (log to file)";
-        probeLbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
-        probeLbl.textColor = [UIColor whiteColor];
-        [probeRow addSubview:probeLbl];
-        [_contentContainer addSubview:probeRow];
-        y += kRowHeight + 6;
-
-        UILabel *hint2 = [[UILabel alloc] initWithFrame:CGRectMake(startX, y, rowW, 30)];
-        hint2.text = @"Log → /var/mobile/Documents/remote_probe.log";
-        hint2.font = [UIFont systemFontOfSize:10 weight:UIFontWeightRegular];
-        hint2.textColor = kColorMuted;
-        hint2.numberOfLines = 2;
-        [_contentContainer addSubview:hint2];
         y += 34;
 
         UILabel *devTitle = [[UILabel alloc] initWithFrame:CGRectMake(startX, y, rowW, 20)];
@@ -959,7 +932,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 
         _trackingPointerId = pointerId;
         _touchOnClose = _touchOnExitHUD = NO;
-        _touchOnProbeRemote = _touchOnProbeCapsule = NO;
+        _touchOnProbeCapsule = NO;
         _menuDragging = NO;
         _activeCheckbox = nil; _segmentedRowTracking = nil; _sliderTracking = nil;
         _isScrollingContent = NO;
@@ -1044,7 +1017,6 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             NSString *rk = objc_getAssociatedObject(rv, "key");
             if ([rk isEqualToString:@"__exit_hud__"])      { _touchOnExitHUD     = YES; break; }
             if ([rk isEqualToString:@"__probe_capsule__"]) { _touchOnProbeCapsule = YES; break; }
-            if ([rk isEqualToString:@"__probe_remote__"])  { _touchOnProbeRemote  = YES; break; }
 
             for (UIView *sub in rv.subviews) {
                 if (objc_getAssociatedObject(sub, "isCheckbox")) { _activeCheckbox = sub; break; }
@@ -1053,8 +1025,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         }
 
         if (!_activeCheckbox && !_touchOnExitHUD &&
-            !_touchOnProbeCapsule && !_touchOnProbeRemote &&
-            !_segmentedRowTracking) {
+            !_touchOnProbeCapsule && !_segmentedRowTracking) {
             for (UIView *v in _contentContainer.subviews) {
                 if ([v isKindOfClass:[UISlider class]] && CGRectContainsPoint(v.frame, inContent)) {
                     _sliderTracking = (UISlider *)v; break;
@@ -1111,7 +1082,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             if (ABS(dy) > 3) {
                 _isScrollingContent = YES;
                 _activeCheckbox = nil; _segmentedRowTracking = nil;
-                _touchOnExitHUD = NO; _touchOnProbeCapsule = NO; _touchOnProbeRemote = NO;
+                _touchOnExitHUD = NO; _touchOnProbeCapsule = NO;
             }
             _scrollLastTouchY = point.y;
             _scrollLastTime = now;
@@ -1126,8 +1097,6 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             [self closeTapped];
         } else if (_touchOnProbeCapsule && !_isScrollingContent) {
             ProbeCapsule();
-        } else if (_touchOnProbeRemote && !_isScrollingContent) {
-            ProbeRemote();
         } else if (_touchOnExitHUD && !_isScrollingContent && self.onExitHUDRequested) {
             self.onExitHUDRequested();
         } else if (_activeCheckbox && !_isScrollingContent) {
@@ -1150,7 +1119,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 
         _trackingPointerId = -1;
         _touchOnClose = _touchOnExitHUD = NO;
-        _touchOnProbeCapsule = _touchOnProbeRemote = NO;
+        _touchOnProbeCapsule = NO;
         _menuDragging = _scrollbarDragging = NO;
         _activeCheckbox = nil; _segmentedRowTracking = nil; _sliderTracking = nil;
         _isScrollingContent = NO;
