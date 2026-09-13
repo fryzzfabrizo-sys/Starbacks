@@ -1,10 +1,8 @@
 // magnet.mm
 // Aim Magnet через root transform (0x660).
-//   • работает вместе с Aimbot и Silent Aim (получает тот же bestTarget)
+//   • работает вместе с Aimbot и Silent Aim
 //   • Y НЕ меняется — фиксируется на исходной позиции врага
-//   • враг тянется к точке прицела
-//   • clamp по XZ рассчитан так, чтобы модель оставалась
-//     внутри бустнутого коллайдера (radius=3.0)
+//   • clamp по XZ = 2.00м (внутри бустнутого коллайдера radius=2.40 с запасом 0.4м)
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -28,15 +26,14 @@ static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
 // ─── Параметры магнита ──────────────────────────────────
-static constexpr float kMagStrength   = 0.40f;   // скорость притяжения
+static constexpr float kMagStrength   = 0.40f;
 static constexpr float kMagMaxDist    = 80.0f;
 static constexpr float kMagMinDist    = 1.0f;
 
-// Максимальное смещение модели врага от серверной позиции (метры, XZ).
-// Буст-radius коллайдера = 3.00. Держим смещение меньше радиуса
-// с запасом 0.5м — чтобы модель никогда не покидала бустнутый коллайдер
-// и урон не становился фейковым.
-static constexpr float kMagMaxDisplacement = 2.50f;
+// Максимальное смещение модели от серверной позиции (метры, XZ).
+// Буст-radius = 2.40 (5× от 0.48). Держим 2.00 — запас 0.4м,
+// чтобы модель никогда не покидала бустнутый коллайдер.
+static constexpr float kMagMaxDisplacement = 2.00f;
 
 static constexpr int   kMagTickMs     = 4;
 static constexpr int   kMagReleaseMs  = 200;
@@ -133,8 +130,7 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
         curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
     };
 
-    // Clamp по XZ от исходной серверной позиции.
-    // Гарантирует, что модель врага остаётся внутри бустнутого коллайдера.
+    // Clamp по XZ от исходной серверной позиции
     Vector3 deltaOrig = { lerped.x - mag_originalRoot.x, 0.0f, lerped.z - mag_originalRoot.z };
     float dOrig = vlen2xz(deltaOrig);
     if (dOrig > kMagMaxDisplacement && dOrig > 0.0001f) {
