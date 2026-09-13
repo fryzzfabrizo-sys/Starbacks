@@ -1,5 +1,5 @@
 // magnet.mm
-// Aim Magnet — плавное притяжение головы к лучу камеры, синхронно с игрой (60 Hz)
+// Lock-based aim magnet. Один лок на цель. Delta-запись, без world-in-local.
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -15,128 +15,150 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimMagnet;
 
-// ─── Transform write offsets ────────────────────────────────────────
-static constexpr uint64_t kT_Inner  = 0x10;
-static constexpr uint64_t kT_Matrix = 0x38;
-static constexpr uint64_t kT_PosOff = 0x90;
+// ─── Transform chain ────────────────────────────────────────────────
+static constexpr uint64_t kMag_HeadNode     = 0x638;
+static constexpr uint64_t kMag_BodyPartNode = 0x10;
+static constexpr uint64_t kMag_Inner        = 0x10;
+static constexpr uint64_t kMag_Matrix       = 0x38;
+static constexpr uint64_t kMag_PosOff       = 0x90;
 
-// ─── Настройки магнита ──────────────────────────────────────────────
-static constexpr float kMagnetStrength   = 0.08f;  // 8% за кадр — плавно
-static constexpr float kMagnetMaxDist    = 50.0f;
-static constexpr int   kMagnetTickMs     = 16;     // 60 Hz — как кадр игры
+// ─── Tuning ─────────────────────────────────────────────────────────
+static constexpr float kMagStrength   = 0.20f;
+static constexpr float kMagMaxDist    = 60.0f;
+static constexpr float kMagMinDist    = 0.5f;
+static constexpr int   kMagTickMs     = 15;
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        mag_lock;
 static std::atomic<bool> mag_hasData{false};
 static std::atomic<bool> mag_started{false};
 
-static uint64_t mag_target   = 0;
-static Vector3  mag_camPos   = {};
-static Vector3  mag_camFwd   = {};
+static uint64_t mag_candidate  = 0;
+static Vector3  mag_camPos     = {};
+static Vector3  mag_camFwd     = {};
 
-// Оригинал головы — читаем ОДИН раз при взятии цели, от него считаем всегда
-static uint64_t mag_lastTarget  = 0;
-static Vector3  mag_origHead    = {};
-static bool     mag_origValid   = false;
+static uint64_t mag_locked     = 0;
+static Vector3  mag_savedLocal = {};
+static bool     mag_saved      = false;
 
-// ─── Helpers ────────────────────────────────────────────────────────
-static inline float dot3(Vector3 a, Vector3 b) {
-    return a.x*b.x + a.y*b.y + a.z*b.z;
-}
-static inline float vlen3(Vector3 v) {
-    return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
-}
-static inline bool isZeroVec(Vector3 v) {
-    return v.x == 0.0f && v.y == 0.0f && v.z == 0.0f;
+// ─── Utils ──────────────────────────────────────────────────────────
+static inline float vlen3(Vector3 v) { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
+static inline float dot3(Vector3 a, Vector3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
+static inline bool isZero3(Vector3 v) { return v.x==0.f && v.y==0.f && v.z==0.f; }
+
+// ─── Bone local position access ─────────────────────────────────────
+static bool BoneReadLocal(uint64_t pawn, Vector3& outPos) {
+    if (!isVaildPtr(pawn)) return false;
+    uint64_t bone = ReadAddr<uint64_t>(pawn + kMag_HeadNode);
+    if (!isVaildPtr(bone)) return false;
+    uint64_t trans = ReadAddr<uint64_t>(bone + kMag_BodyPartNode);
+    if (!isVaildPtr(trans)) return false;
+    uint64_t p3 = ReadAddr<uint64_t>(trans + kMag_Inner);
+    if (!isVaildPtr(p3)) return false;
+    uint64_t mat = ReadAddr<uint64_t>(p3 + kMag_Matrix);
+    if (!isVaildPtr(mat)) return false;
+    outPos = ReadAddr<Vector3>(mat + kMag_PosOff);
+    return true;
 }
 
-static Vector3 HeadPos(uint64_t pawn) {
+static bool BoneWriteLocal(uint64_t pawn, Vector3 pos) {
+    if (!isVaildPtr(pawn)) return false;
+    uint64_t bone = ReadAddr<uint64_t>(pawn + kMag_HeadNode);
+    if (!isVaildPtr(bone)) return false;
+    uint64_t trans = ReadAddr<uint64_t>(bone + kMag_BodyPartNode);
+    if (!isVaildPtr(trans)) return false;
+    uint64_t p3 = ReadAddr<uint64_t>(trans + kMag_Inner);
+    if (!isVaildPtr(p3)) return false;
+    uint64_t mat = ReadAddr<uint64_t>(p3 + kMag_Matrix);
+    if (!isVaildPtr(mat)) return false;
+    WriteAddr<Vector3>(mat + kMag_PosOff, pos);
+    return true;
+}
+
+static Vector3 HeadWorld(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t t = getHead(pawn);
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// headTransNode → +0x10 → p3 → +0x38 → matPtr → write at +0x90
-static bool WriteHeadPos(uint64_t pawn, Vector3 pos) {
-    if (!isVaildPtr(pawn)) return false;
-    uint64_t headNode = ReadAddr<uint64_t>(pawn + kHeadNode);
-    if (!isVaildPtr(headNode)) return false;
-    uint64_t transNode = ReadAddr<uint64_t>(headNode + kBodyPartTransNode);
-    if (!isVaildPtr(transNode)) return false;
-    uint64_t p3 = ReadAddr<uint64_t>(transNode + kT_Inner);
-    if (!isVaildPtr(p3)) return false;
-    uint64_t matPtr = ReadAddr<uint64_t>(p3 + kT_Matrix);
-    if (!isVaildPtr(matPtr)) return false;
-
-    WriteAddr<Vector3>(matPtr + kT_PosOff, pos);
-    return true;
+// ─── Release lock с восстановлением оригинала ──────────────────────
+static void ReleaseLock() {
+    if (mag_saved && isVaildPtr(mag_locked)) {
+        BoneWriteLocal(mag_locked, mag_savedLocal);
+    }
+    mag_locked = 0;
+    mag_saved  = false;
 }
 
 // ─── Worker ─────────────────────────────────────────────────────────
 static void MagnetWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(kMagnetTickMs));
+        std::this_thread::sleep_for(std::chrono::milliseconds(kMagTickMs));
 
         if (!mag_hasData.load(std::memory_order_acquire)) {
-            // сброс при выключении
-            mag_origValid  = false;
-            mag_lastTarget = 0;
+            ReleaseLock();
             continue;
         }
 
-        uint64_t target;
+        uint64_t candidate;
         Vector3  camPos, camFwd;
         {
             std::lock_guard<std::mutex> lk(mag_lock);
-            target = mag_target;
-            camPos = mag_camPos;
-            camFwd = mag_camFwd;
-        }
-        if (!isVaildPtr(target)) continue;
-
-        // ─── Смена цели → сброс оригинала ──────────────────────────
-        if (target != mag_lastTarget) {
-            mag_lastTarget = target;
-            mag_origValid  = false;
+            candidate = mag_candidate;
+            camPos    = mag_camPos;
+            camFwd    = mag_camFwd;
         }
 
-        // ─── Один раз читаем оригинал головы ───────────────────────
-        if (!mag_origValid) {
-            Vector3 h = HeadPos(target);
-            if (isZeroVec(h)) continue;
-            mag_origHead  = h;
-            mag_origValid = true;
-            // Первый тик — просто запоминаем, не двигаем
+        if (!isVaildPtr(mag_locked)) {
+            mag_locked = 0;
+            mag_saved  = false;
+
+            if (isVaildPtr(candidate) && get_CurHP(candidate) > 0) {
+                Vector3 lp;
+                if (BoneReadLocal(candidate, lp)) {
+                    mag_locked     = candidate;
+                    mag_savedLocal = lp;
+                    mag_saved      = true;
+                }
+            }
+            if (!isVaildPtr(mag_locked)) continue;
+        }
+
+        if (get_CurHP(mag_locked) <= 0) {
+            ReleaseLock();
             continue;
         }
 
-        // ─── Считаем от ОРИГИНАЛА, не от свежей позиции ────────────
-        Vector3 headPos = mag_origHead;
+        Vector3 headW = HeadWorld(mag_locked);
+        if (isZero3(headW)) { ReleaseLock(); continue; }
 
-        Vector3 toEnemy = { headPos.x - camPos.x,
-                            headPos.y - camPos.y,
-                            headPos.z - camPos.z };
-        float dist = vlen3(toEnemy);
-        if (dist > kMagnetMaxDist || dist < 0.5f) continue;
+        Vector3 toHead = { headW.x - camPos.x,
+                           headW.y - camPos.y,
+                           headW.z - camPos.z };
+        float dist = vlen3(toHead);
+        if (dist < kMagMinDist || dist > kMagMaxDist) continue;
 
-        float projDist = dot3(toEnemy, camFwd);
-        if (projDist < 0.5f) continue;
+        float proj = dot3(toHead, camFwd);
+        if (proj < 0.5f) continue;
 
-        // Точка на луче камеры на той же глубине
-        Vector3 onRay = {
-            camPos.x + camFwd.x * projDist,
-            camPos.y + camFwd.y * projDist,
-            camPos.z + camFwd.z * projDist
+        Vector3 desired = {
+            camPos.x + camFwd.x * proj,
+            camPos.y + camFwd.y * proj,
+            camPos.z + camFwd.z * proj
         };
 
-        // Мягкий lerp от оригинала к точке на луче
-        Vector3 newPos = {
-            headPos.x + (onRay.x - headPos.x) * kMagnetStrength,
-            headPos.y + (onRay.y - headPos.y) * kMagnetStrength,
-            headPos.z + (onRay.z - headPos.z) * kMagnetStrength
-        };
+        Vector3 delta = { (desired.x - headW.x) * kMagStrength,
+                          (desired.y - headW.y) * kMagStrength,
+                          (desired.z - headW.z) * kMagStrength };
 
-        WriteHeadPos(target, newPos);
+        Vector3 curLocal;
+        if (!BoneReadLocal(mag_locked, curLocal)) { ReleaseLock(); continue; }
+
+        Vector3 newLocal = { curLocal.x + delta.x,
+                             curLocal.y + delta.y,
+                             curLocal.z + delta.z };
+
+        BoneWriteLocal(mag_locked, newLocal);
     }
 }
 
@@ -146,19 +168,19 @@ void InitMagnetThread() {
         std::thread(MagnetWorker).detach();
 }
 
-void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward) {
+void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward, bool isFiring) {
     InitMagnetThread();
 
-    if (!aimMagnet || !isVaildPtr(target)) {
+    if (!aimMagnet || !isFiring) {
         mag_hasData.store(false, std::memory_order_release);
         return;
     }
 
     {
         std::lock_guard<std::mutex> lk(mag_lock);
-        mag_target = target;
-        mag_camPos = camPos;
-        mag_camFwd = camForward;
+        mag_candidate = target;
+        mag_camPos    = camPos;
+        mag_camFwd    = camForward;
     }
     mag_hasData.store(true, std::memory_order_release);
 }
@@ -166,8 +188,7 @@ void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward) {
 void ResetAimMagnet() {
     mag_hasData.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lk(mag_lock);
-    mag_target = 0;
-
-    mag_lastTarget = 0;
-    mag_origValid  = false;
+    mag_candidate = 0;
+    mag_camPos    = {};
+    mag_camFwd    = {};
 }
