@@ -1,5 +1,5 @@
 // magnet.mm
-// Aim Magnet через root transform. camFwd из aim rotation. Absolute write.
+// Aim Magnet через root transform. Быстрый тик + большая сила.
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -15,13 +15,6 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimMagnet;
 
-// ═══════════════════════════════════════════════════════════════════
-//  РЕЖИМЫ
-//  0 = писать в ROOT (0x660) absolute
-//  1 = писать в HEAD (0x638) absolute
-// ═══════════════════════════════════════════════════════════════════
-static constexpr int kMagWriteNode = 0;
-
 // ─── Offsets ────────────────────────────────────────────────────────
 static constexpr uint64_t kMag_HeadNode = 0x638;
 static constexpr uint64_t kMag_RootNode = 0x660;
@@ -31,12 +24,12 @@ static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
 // ─── Tuning ─────────────────────────────────────────────────────────
-static constexpr float kMagStrength   = 0.35f;
+static constexpr float kMagStrength   = 0.65f;    // ↑↑ против анимации
 static constexpr float kMagHeadOffset = 1.5f;
 static constexpr float kMagMaxDist    = 80.0f;
 static constexpr float kMagMinDist    = 1.0f;
-static constexpr int   kMagTickMs     = 12;      // ~80 Hz — быстрее анимации 60 Hz
-static constexpr int   kMagReleaseMs  = 200;     // авто-релиз если нет данных
+static constexpr int   kMagTickMs     = 4;        // 250 Hz — быстрее кадра
+static constexpr int   kMagReleaseMs  = 200;
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        mag_lock;
@@ -103,32 +96,27 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
     float dist = vlen3({headW.x - camPos.x, headW.y - camPos.y, headW.z - camPos.z});
     if (dist < kMagMinDist || dist > kMagMaxDist) return false;
 
-    // точка на луче камеры на той же глубине, что и голова
     Vector3 targetPt = {
         camPos.x + camFwd.x * dist,
         camPos.y + camFwd.y * dist,
         camPos.z + camFwd.z * dist
     };
 
-    // root должен быть на headOffset ниже головы
     Vector3 rootTgtWorld = {
         targetPt.x,
         targetPt.y - kMagHeadOffset,
         targetPt.z
     };
 
-    // текущий root в world
     Vector3 curRootW = RootWorld(pawn);
     if (!isSane3(curRootW) || isZero3(curRootW)) return false;
 
-    // lerp между текущим и целевым в world
     Vector3 lerped = {
         curRootW.x + (rootTgtWorld.x - curRootW.x) * kMagStrength,
         curRootW.y + (rootTgtWorld.y - curRootW.y) * kMagStrength,
         curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
     };
 
-    // пишем абсолютную world-позицию в local root (root обычно top of hierarchy)
     return WriteLocalAt(pawn, kMag_RootNode, lerped);
 }
 
@@ -137,7 +125,6 @@ static void MagnetWorker() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kMagTickMs));
 
-        // авто-релиз по таймауту
         auto now = std::chrono::steady_clock::now();
         auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
                         now - mag_lastUpdate).count();
