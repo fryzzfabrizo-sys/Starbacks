@@ -3,5 +3,5 @@
 #include <stdint.h>
 
 void InitMagnetThread();
-void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward);
+void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward, bool isFiring);
 void ResetAimMagnet();
