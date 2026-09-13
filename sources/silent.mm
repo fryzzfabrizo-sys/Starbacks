@@ -1,5 +1,5 @@
 // silent.mm
-// Silent aim + дамп структуры HitInfo в файл
+// Silent aim + кэш collider для обхода стен
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -8,8 +8,7 @@
 #include <mutex>
 #include <thread>
 #include <cmath>
-#include <chrono>
-#include <cstdio>
+#include <unordered_map>
 
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
@@ -20,25 +19,13 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;
 static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
-static constexpr uint64_t HI_klass           = 0x00;
-static constexpr uint64_t HI_monitor         = 0x08;
-static constexpr uint64_t HI_m_IsInPool      = 0x10;
-static constexpr uint64_t HI_HitObject       = 0x18;
-static constexpr uint64_t HI_HitCollider     = 0x20;
-static constexpr uint64_t HI_HitLocation     = 0x28;
-static constexpr uint64_t HI_HitNormal       = 0x34;
-static constexpr uint64_t HI_RayDir          = 0x40;
-static constexpr uint64_t HI_StartPosition   = 0x4C;
-static constexpr uint64_t HI_Damage          = 0x58;
-static constexpr uint64_t HI_Distance        = 0x5C;
-static constexpr uint64_t HI_ActorLayer      = 0x60;
-static constexpr uint64_t HI_HitGroup        = 0x64;
-static constexpr uint64_t HI_HitPhysicMat    = 0x68;
-static constexpr uint64_t HI_IgnoreHappens   = 0x70;
-static constexpr uint64_t HI_ViewBlocked     = 0x71;
-static constexpr uint64_t HI_OrigStartPos    = 0x74;
-static constexpr uint64_t HI_SpecialHitType  = 0x80;
-static constexpr uint64_t HI_SpecialHitObjID = 0x84;
+static constexpr uint64_t HI_HitObject      = 0x18;
+static constexpr uint64_t HI_HitCollider    = 0x20;
+static constexpr uint64_t HI_HitLocation    = 0x28;
+static constexpr uint64_t HI_HitNormal      = 0x34;
+static constexpr uint64_t HI_RayDir         = 0x40;
+static constexpr uint64_t HI_StartPosition  = 0x4C;
+static constexpr uint64_t HI_ActorLayer     = 0x60;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -47,8 +34,10 @@ static uint64_t          g_aimPtr    = 0;
 static Vector3           g_tPos      = {};
 static uint64_t          g_lastMatch = 0;
 
-static uint64_t g_lastLoggedCollider = 0;
-static int      g_lastLoggedDamage   = -1;
+// Кэш: цель → указатель на её collider (и на её GameObject)
+static std::mutex g_cacheLock;
+static std::unordered_map<uint64_t, uint64_t> g_colliderCache;  // target -> collider
+static std::unordered_map<uint64_t, uint64_t> g_objectCache;    // target -> gameObject
 
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
@@ -64,70 +53,6 @@ static Vector3 HeadPos(uint64_t pawn) {
     uint64_t node = ReadAddr<uint64_t>(bodyPart + kBodyPart_TransNode);
     if (!validPtr(node)) return {};
     return getPositionExt(node);
-}
-
-static void LogLine(const char* fmt, ...) {
-    FILE* f = fopen("/var/mobile/Documents/hitinfo_dump.log", "a");
-    if (!f) return;
-    va_list args; va_start(args, fmt);
-    vfprintf(f, fmt, args);
-    va_end(args);
-    fputc('\n', f);
-    fclose(f);
-}
-
-static void DumpHitInfo(uint64_t h, uint64_t target, const Vector3& tPos) {
-    if (!validPtr(h)) return;
-
-    uint64_t klass        = ReadAddr<uint64_t>(h + HI_klass);
-    uint64_t monitor      = ReadAddr<uint64_t>(h + HI_monitor);
-    uint8_t  isInPool     = ReadAddr<uint8_t> (h + HI_m_IsInPool);
-    uint64_t hitObject    = ReadAddr<uint64_t>(h + HI_HitObject);
-    uint64_t hitCollider  = ReadAddr<uint64_t>(h + HI_HitCollider);
-    Vector3  hitLocation  = ReadAddr<Vector3>(h + HI_HitLocation);
-    Vector3  hitNormal    = ReadAddr<Vector3>(h + HI_HitNormal);
-    Vector3  rayDir       = ReadAddr<Vector3>(h + HI_RayDir);
-    Vector3  startPos     = ReadAddr<Vector3>(h + HI_StartPosition);
-    int32_t  damage       = ReadAddr<int32_t> (h + HI_Damage);
-    float    distance     = ReadAddr<float>   (h + HI_Distance);
-    int32_t  actorLayer   = ReadAddr<int32_t> (h + HI_ActorLayer);
-    int32_t  hitGroup     = ReadAddr<int32_t> (h + HI_HitGroup);
-    uint64_t hitPhysMat   = ReadAddr<uint64_t>(h + HI_HitPhysicMat);
-    uint8_t  ignoreHap    = ReadAddr<uint8_t> (h + HI_IgnoreHappens);
-    uint8_t  viewBlocked  = ReadAddr<uint8_t> (h + HI_ViewBlocked);
-    Vector3  origStartPos = ReadAddr<Vector3>(h + HI_OrigStartPos);
-    uint8_t  specHitType  = ReadAddr<uint8_t> (h + HI_SpecialHitType);
-    uint32_t specHitObjID = ReadAddr<uint32_t>(h + HI_SpecialHitObjID);
-
-    if (damage <= 0 && hitCollider == g_lastLoggedCollider) return;
-    g_lastLoggedCollider = hitCollider;
-    g_lastLoggedDamage   = damage;
-
-    LogLine("========== HITINFO DUMP ==========");
-    LogLine("target        = 0x%llx   head=(%.2f, %.2f, %.2f)",
-            target, tPos.x, tPos.y, tPos.z);
-    LogLine("hitInfo       = 0x%llx", h);
-    LogLine("klass         = 0x%llx", klass);
-    LogLine("monitor       = 0x%llx", monitor);
-    LogLine("m_IsInPool    = %d", isInPool);
-    LogLine("HitObject     = 0x%llx  <-- GameObject", hitObject);
-    LogLine("HitCollider   = 0x%llx  <-- Collider", hitCollider);
-    LogLine("HitLocation   = (%.2f, %.2f, %.2f)", hitLocation.x, hitLocation.y, hitLocation.z);
-    LogLine("HitNormal     = (%.2f, %.2f, %.2f)", hitNormal.x, hitNormal.y, hitNormal.z);
-    LogLine("RayDir        = (%.2f, %.2f, %.2f)", rayDir.x, rayDir.y, rayDir.z);
-    LogLine("StartPosition = (%.2f, %.2f, %.2f)", startPos.x, startPos.y, startPos.z);
-    LogLine("Damage        = %d", damage);
-    LogLine("Distance      = %.2f", distance);
-    LogLine("ActorLayer    = %d", actorLayer);
-    LogLine("HitGroup      = %d", hitGroup);
-    LogLine("HitPhysicMat  = 0x%llx", hitPhysMat);
-    LogLine("IgnoreHappens = %d", ignoreHap);
-    LogLine("ViewBlocked   = %d", viewBlocked);
-    LogLine("OrigStartPos  = (%.2f, %.2f, %.2f)", origStartPos.x, origStartPos.y, origStartPos.z);
-    LogLine("SpecialHitType= %d", specHitType);
-    LogLine("SpecialHitObID= %d", specHitObjID);
-    LogLine("==================================");
-    LogLine("");
 }
 
 static void SilentWorker() {
@@ -151,15 +76,45 @@ static void SilentWorker() {
             continue;
         }
 
+        // 1. RayDir — как раньше
         Vector3 origin = ReadAddr<Vector3>(h + HI_StartPosition);
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
         WriteAddr<Vector3>(h + HI_RayDir, diff);
 
-        DumpHitInfo(h, target, tPos);
+        // 2. Читаем текущий результат raycast
+        int32_t actorLayer = ReadAddr<int32_t>(h + HI_ActorLayer);
+        uint64_t hitColl   = ReadAddr<uint64_t>(h + HI_HitCollider);
+        uint64_t hitObj    = ReadAddr<uint64_t>(h + HI_HitObject);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        // 3. Кэшируем успешное попадание в игрока (layer 13)
+        if (actorLayer == 13 && validPtr(hitColl) && validPtr(target)) {
+            std::lock_guard<std::mutex> lk(g_cacheLock);
+            g_colliderCache[target] = hitColl;
+            if (validPtr(hitObj)) g_objectCache[target] = hitObj;
+        }
+
+        // 4. Если попали в стену (layer 8) — подставляем кэш
+        if (actorLayer != 13 && validPtr(target)) {
+            uint64_t cachedColl = 0, cachedObj = 0;
+            {
+                std::lock_guard<std::mutex> lk(g_cacheLock);
+                auto it = g_colliderCache.find(target);
+                if (it != g_colliderCache.end()) cachedColl = it->second;
+                auto it2 = g_objectCache.find(target);
+                if (it2 != g_objectCache.end()) cachedObj = it2->second;
+            }
+
+            if (validPtr(cachedColl)) {
+                WriteAddr<uint64_t>(h + HI_HitCollider, cachedColl);
+                if (validPtr(cachedObj))
+                    WriteAddr<uint64_t>(h + HI_HitObject, cachedObj);
+                WriteAddr<Vector3>(h + HI_HitLocation, tPos);
+                WriteAddr<Vector3>(h + HI_HitNormal,  {0.f, 1.f, 0.f});
+                WriteAddr<int32_t>(h + HI_ActorLayer,  13);
+            }
+        }
     }
 }
 
@@ -174,6 +129,10 @@ void ResetSilentAim() {
     std::lock_guard<std::mutex> lk(g_lock);
     g_aimPtr = 0;
     g_tPos   = {};
+
+    std::lock_guard<std::mutex> lk2(g_cacheLock);
+    g_colliderCache.clear();
+    g_objectCache.clear();
 }
 
 void RunSilentAim() {
