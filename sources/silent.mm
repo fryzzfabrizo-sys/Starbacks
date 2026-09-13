@@ -1,5 +1,6 @@
 // SilentAim.mm
-// Silent aim через ITransformNode головы (0x638) с упреждением, динамическим origin, фильтрацией гранат/стен и поправкой на шею
+// Silent aim через ITransformNode головы (0x638) + запись TargetPos (0x28) и RayDir (0x40) с упреждением
+// + форсирование Hit_Part = 1 (Head)
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -20,6 +21,7 @@ static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;   // LastAimInfo_Ptr (iOS
 static constexpr uint64_t kHit_RayDir         = 0x40;    // Vector3 RayDir
 static constexpr uint64_t kHit_StartPos       = 0x4C;    // Vector3 StartPos
 static constexpr uint64_t kHit_TargetPos      = 0x28;    // Vector3 TargetPos
+static constexpr uint64_t kHit_Part           = 0x64;    // int Part (0=Default, 1=Head, 2=Body)
 
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;   // ITransformNode Head
 static constexpr uint64_t kBodyPart_TransNode = 0x10;    // ITransformNode -> Transform
@@ -47,7 +49,7 @@ static inline bool validVec(const Vector3& v) {
            !(v.x == 0.f && v.y == 0.f && v.z == 0.f);
 }
 
-// Голова с поправкой по Y вверх, чтобы при прыжках/движении не цепляло шею
+// Голова строго по оффсету: Player + 0x638 -> BodyPart + 0x10 -> Transform -> getPositionExt
 static Vector3 HeadPos(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
 
@@ -57,32 +59,7 @@ static Vector3 HeadPos(uint64_t pawn) {
     uint64_t node = ReadAddr<uint64_t>(bodyPart + kBodyPart_TransNode);
     if (!validPtr(node)) return {};
 
-    Vector3 head = getPositionExt(node);
-    
-    // Поднимаем точку чуть выше центра головы (в макушку/лицо), компенсируя наклон и шею
-    head.y += 0.08f; 
-
-    return head;
-}
-
-// Отсеивание гранат, стен (глоллуов) иutility-предметов через проверку оружия в руках
-static bool IsThrowingOrUtility(uint64_t localPlayer) {
-    if (!validPtr(localPlayer)) return false;
-    
-    uint64_t wpn = WeaponOnHand(localPlayer);
-    if (!validPtr(wpn)) return false;
-
-    // В Free Fire у гранат, стен и особых предметов ID оружия обычно попадают в определенные диапазоны 
-    // или имеют специфические флаги/типы. Проверяем через DataPool оружия, если стандартный метод вернул ID.
-    int weaponId = GetDataUInt16(wpn, 0); // Пример получения ID через базовый индекс данных оружия
-    
-    // Диапазоны ID гранат, стен (gloodwall) и предметов поддержки (примерные/типовые для сборки)
-    // Если граната или стена активна — возвращаем true, чтобы сайлент отключился
-    if (weaponId >= 14000 && weaponId <= 15500) {
-        return true;
-    }
-
-    return false; 
+    return getPositionExt(node);
 }
 
 // ─── Silent Worker ──────────────────────────────────────────────────
@@ -106,13 +83,16 @@ static void SilentWorker() {
             continue;
         }
 
+        // Динамическое чтение origin (ammoBase) в реальном времени
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
 
+        // Запись вектора направления, целевой позиции и форс-флага головы
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
         WriteAddr<Vector3>(h + kHit_TargetPos, tPos);
+        WriteAddr<int>(h + kHit_Part, 1);   // 1 = Head
     }
 }
 
@@ -155,12 +135,6 @@ void RunSilentAim() {
         return;
     }
 
-    // Блокируем сайлент-аим, если в руках граната или стена
-    if (IsThrowingOrUtility(local)) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-
     uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
@@ -173,12 +147,14 @@ void RunSilentAim() {
         return;
     }
 
+    // Сброс истории скорости при смене цели
     if (target != g_lastTarget) {
         g_lastEnemyPos = tPos;
         g_lastTarget   = target;
         g_lastTime     = std::chrono::high_resolution_clock::now();
     }
 
+    // Расчет скорости цели и предсказание позиции (Prediction)
     auto now = std::chrono::high_resolution_clock::now();
     float dt = std::chrono::duration<float>(now - g_lastTime).count();
 
@@ -192,6 +168,7 @@ void RunSilentAim() {
     g_lastEnemyPos = tPos;
     g_lastTime     = now;
 
+    // Время упреждения
     float predictionTime = 0.12f;
 
     Vector3 predictedPos = {
@@ -214,4 +191,5 @@ void RunSilentAim() {
 
     WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
     WriteAddr<Vector3>(aimPtr + kHit_TargetPos, predictedPos);
+    WriteAddr<int>(aimPtr + kHit_Part, 1);   // 1 = Head
 }
