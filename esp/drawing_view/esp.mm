@@ -815,7 +815,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
-    self = [super init];
+    self = [super initWithFrame:frame];
     if (!self) return nil;
 
     for (UIView *v in self.subviews) [v removeFromSuperview];
