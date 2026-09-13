@@ -1,8 +1,10 @@
 // magnet.mm
 // Aim Magnet через root transform (0x660).
+//   • работает вместе с Aimbot и Silent Aim (получает тот же bestTarget)
 //   • Y НЕ меняется — фиксируется на исходной позиции врага
-//   • clamp: не тянуть врага дальше kMagMaxDisplacement от исходной позиции
-//   • anti-jitter убран
+//   • враг тянется к точке прицела
+//   • clamp по XZ рассчитан так, чтобы модель оставалась
+//     внутри бустнутого коллайдера (radius=3.0)
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -26,16 +28,15 @@ static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
 // ─── Параметры магнита ──────────────────────────────────
-static constexpr float kMagStrength   = 0.45f;   // скорость притяжения
-static constexpr float kMagHeadOffset = 1.5f;
+static constexpr float kMagStrength   = 0.40f;   // скорость притяжения
 static constexpr float kMagMaxDist    = 80.0f;
 static constexpr float kMagMinDist    = 1.0f;
 
-// Максимальное смещение врага от исходной позиции (метры)
-static constexpr float kMagMaxDisplacement = 1.2f;
-
-// Угол "враг в прицеле" (град) — намеренно широкий
-static constexpr float kMagMaxAngleDeg     = 45.0f;
+// Максимальное смещение модели врага от серверной позиции (метры, XZ).
+// Буст-radius коллайдера = 3.00. Держим смещение меньше радиуса
+// с запасом 0.5м — чтобы модель никогда не покидала бустнутый коллайдер
+// и урон не становился фейковым.
+static constexpr float kMagMaxDisplacement = 2.50f;
 
 static constexpr int   kMagTickMs     = 4;
 static constexpr int   kMagReleaseMs  = 200;
@@ -99,27 +100,9 @@ static bool WriteLocalRoot(uint64_t pawn, Vector3 pos) {
     return true;
 }
 
-static bool IsInCrosshair(const Vector3& camPos, const Vector3& camFwd, const Vector3& enemyHead) {
-    Vector3 toEnemy = { enemyHead.x - camPos.x,
-                        enemyHead.y - camPos.y,
-                        enemyHead.z - camPos.z };
-    float len = vlen3(toEnemy);
-    if (len < 0.001f) return false;
-
-    float inv = 1.0f / len;
-    float dot = (toEnemy.x * camFwd.x + toEnemy.y * camFwd.y + toEnemy.z * camFwd.z) * inv;
-    if (dot < -1.0f) dot = -1.0f;
-    if (dot >  1.0f) dot =  1.0f;
-
-    float angleDeg = acosf(dot) * 180.0f / 3.14159265f;
-    return angleDeg <= kMagMaxAngleDeg;
-}
-
 static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& camFwd) {
     Vector3 headW = HeadWorld(pawn);
     if (!isSane3(headW) || isZero3(headW)) return false;
-
-    if (!IsInCrosshair(camPos, camFwd, headW)) return false;
 
     float dist = vlen3({headW.x - camPos.x, headW.y - camPos.y, headW.z - camPos.z});
     if (dist < kMagMinDist || dist > kMagMaxDist) return false;
@@ -129,28 +112,29 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
 
     if (!mag_originalRootValid) return false;
 
-    // Целевая точка на линии прицела
+    // Точка, куда смотрит прицел, на дистанции до врага
     Vector3 targetPt = {
         camPos.x + camFwd.x * dist,
         camPos.y + camFwd.y * dist,
         camPos.z + camFwd.z * dist
     };
 
-    // Y жёстко фиксируем на исходной позиции
+    // Root target — Y фиксируем, X/Z из линии прицела
     Vector3 rootTgtWorld = {
         targetPt.x,
         mag_originalRoot.y,
         targetPt.z
     };
 
-    // Простой lerp по XZ
+    // Lerp по XZ, Y не трогаем
     Vector3 lerped = {
         curRootW.x + (rootTgtWorld.x - curRootW.x) * kMagStrength,
         mag_originalRoot.y,
         curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
     };
 
-    // Кламп по XZ
+    // Clamp по XZ от исходной серверной позиции.
+    // Гарантирует, что модель врага остаётся внутри бустнутого коллайдера.
     Vector3 deltaOrig = { lerped.x - mag_originalRoot.x, 0.0f, lerped.z - mag_originalRoot.z };
     float dOrig = vlen2xz(deltaOrig);
     if (dOrig > kMagMaxDisplacement && dOrig > 0.0001f) {
