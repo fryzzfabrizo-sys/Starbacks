@@ -1,10 +1,9 @@
 // magnet.mm
-// Aim Magnet — root transform + настраиваемые оффсеты из меню
+// Aim Magnet — упрощённый, дефолтные настройки
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
 #import "../esp/drawing_view/offset.h"
-#import "../esp/drawing_view/ESPPrefs.h"
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
@@ -16,7 +15,6 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimMagnet;
 
-// ─── Offsets ────────────────────────────────────────────────────────
 static constexpr uint64_t kMag_HeadNode = 0x638;
 static constexpr uint64_t kMag_RootNode = 0x660;
 static constexpr uint64_t kMag_BodyPart = 0x10;
@@ -24,13 +22,13 @@ static constexpr uint64_t kMag_Inner    = 0x10;
 static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
-// ─── Tuning ─────────────────────────────────────────────────────────
-static constexpr float kMagMaxDist   = 80.0f;
-static constexpr float kMagMinDist   = 1.0f;
-static constexpr int   kMagTickMs    = 4;
-static constexpr int   kMagReleaseMs = 200;
+static constexpr float kMagStrength   = 0.35f;
+static constexpr float kMagHeadOffset = 1.5f;
+static constexpr float kMagMaxDist    = 80.0f;
+static constexpr float kMagMinDist    = 1.0f;
+static constexpr int   kMagTickMs     = 4;
+static constexpr int   kMagReleaseMs  = 200;
 
-// ─── State ──────────────────────────────────────────────────────────
 static std::mutex        mag_lock;
 static std::atomic<bool> mag_hasData{false};
 static std::atomic<bool> mag_started{false};
@@ -43,12 +41,11 @@ static uint64_t mag_locked    = 0;
 static std::chrono::steady_clock::time_point mag_lastUpdate =
     std::chrono::steady_clock::now();
 
-// ─── Utils ──────────────────────────────────────────────────────────
 static inline float vlen3(Vector3 v) { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
-static inline bool  isZero3(Vector3 v) { return v.x==0.f && v.y==0.f && v.z==0.f; }
-static inline bool  isSane3(Vector3 v) {
+static inline bool  isZero3(Vector3 v) if { return v.x==0.f && v.y==0.f && v.z==0.f; }
+static inline bool  isS (!ane3(Vector3 v) {
     if (!isfinite(v.x) || !isfinite(v.y) || !isfinite(v.z)) return false;
-    if (fabsf(v.x) > 20000.f || fabsf(v.y) > 20000.f || fabsf(v.z) > 20000.f) return false;
+is    if (fabsf(v.x) > 20000.f || fabsf(v.y) > 20000.f || fabsf(v.z) > 20000.f) return false;
     return true;
 }
 
@@ -59,7 +56,7 @@ static Vector3 HeadWorld(uint64_t pawn) {
 }
 
 static Vector3 RootWorld(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return {};
+   VaildPtr(pawn)) return {};
     uint64_t node = ReadAddr<uint64_t>(pawn + kMag_RootNode);
     if (!isVaildPtr(node)) return {};
     uint64_t tf = ReadAddr<uint64_t>(node + kMag_BodyPart);
@@ -87,34 +84,7 @@ static bool WriteLocalAt(uint64_t pawn, uint64_t nodeOff, Vector3 pos) {
     return true;
 }
 
-// ─── Tuning из меню ─────────────────────────────────────────────────
-struct MagTune {
-    float strength;
-    float yOffset;
-    float xOffset;
-    float zOffset;
-};
-
-static MagTune ReadTune() {
-    MagTune t;
-    t.strength = ESPPrefsFloat(NSSENCRYPT("MagStrength"), 0.35f);
-    t.yOffset  = ESPPrefsFloat(NSSENCRYPT("MagYOffset"),  1.50f);
-    t.xOffset  = ESPPrefsFloat(NSSENCRYPT("MagXOffset"),  0.00f);
-    t.zOffset  = ESPPrefsFloat(NSSENCRYPT("MagZOffset"),  0.00f);
-
-    if (t.strength < 0.02f) t.strength = 0.02f;
-    if (t.strength > 1.00f) t.strength = 1.00f;
-    if (t.yOffset  < -1.5f) t.yOffset  = -1.5f;
-    if (t.yOffset  >  3.0f) t.yOffset  =  3.0f;
-    if (t.xOffset  < -2.0f) t.xOffset  = -2.0f;
-    if (t.xOffset  >  2.0f) t.xOffset  =  2.0f;
-    if (t.zOffset  < -2.0f) t.zOffset  = -2.0f;
-    if (t.zOffset  >  2.0f) t.zOffset  =  2.0f;
-    return t;
-}
-
-// ─── Core ───────────────────────────────────────────────────────────
-static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& camFwd, const MagTune& tune) {
+static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& camFwd) {
     Vector3 headW = HeadWorld(pawn);
     if (!isSane3(headW) || isZero3(headW)) return false;
 
@@ -126,26 +96,20 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
         camPos.y + camFwd.y * dist,
         camPos.z + camFwd.z * dist
     };
-
-    Vector3 rootTgtWorld = {
-        targetPt.x - tune.xOffset,
-        targetPt.y - tune.yOffset,
-        targetPt.z - tune.zOffset
-    };
+    Vector3 rootTgtWorld = { targetPt.x, targetPt.y - kMagHeadOffset, targetPt.z };
 
     Vector3 curRootW = RootWorld(pawn);
     if (!isSane3(curRootW) || isZero3(curRootW)) return false;
 
     Vector3 lerped = {
-        curRootW.x + (rootTgtWorld.x - curRootW.x) * tune.strength,
-        curRootW.y + (rootTgtWorld.y - curRootW.y) * tune.strength,
-        curRootW.z + (rootTgtWorld.z - curRootW.z) * tune.strength
+        curRootW.x + (rootTgtWorld.x - curRootW.x) * kMagStrength,
+        curRootW.y + (rootTgtWorld.y - curRootW.y) * kMagStrength,
+        curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
     };
 
     return WriteLocalAt(pawn, kMag_RootNode, lerped);
 }
 
-// ─── Worker ─────────────────────────────────────────────────────────
 static void MagnetWorker() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kMagTickMs));
@@ -153,15 +117,9 @@ static void MagnetWorker() {
         auto now = std::chrono::steady_clock::now();
         auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
                         now - mag_lastUpdate).count();
-        if (since > kMagReleaseMs) {
-            mag_locked = 0;
-            continue;
-        }
+        if (since > kMagReleaseMs) { mag_locked = 0; continue; }
 
-        if (!mag_hasData.load(std::memory_order_acquire)) {
-            mag_locked = 0;
-            continue;
-        }
+        if (!mag_hasData.load(std::memory_order_acquire)) { mag_locked = 0; continue; }
 
         uint64_t candidate;
         Vector3  camPos, camFwd;
@@ -173,19 +131,12 @@ static void MagnetWorker() {
         }
 
         if (!isVaildPtr(mag_locked)) {
-            if (isVaildPtr(candidate) && get_CurHP(candidate) > 0) {
-                mag_locked = candidate;
-            }
+            if (isVaildPtr(candidate) && get_CurHP(candidate) > 0) mag_locked = candidate;
             if (!isVaildPtr(mag_locked)) continue;
         }
+        if (get_CurHP(mag_locked) <= 0) { mag_locked = 0; continue; }
 
-        if (get_CurHP(mag_locked) <= 0) {
-            mag_locked = 0;
-            continue;
-        }
-
-        MagTune tune = ReadTune();
-        ApplyMagnet(mag_locked, camPos, camFwd, tune);
+        ApplyMagnet(mag_locked, camPos, camFwd);
     }
 }
 
@@ -197,12 +148,10 @@ void InitMagnetThread() {
 
 void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward, bool isFiring) {
     InitMagnetThread();
-
     if (!aimMagnet || !isFiring || !isVaildPtr(target)) {
         mag_hasData.store(false, std::memory_order_release);
         return;
     }
-
     {
         std::lock_guard<std::mutex> lk(mag_lock);
         mag_candidate = target;
