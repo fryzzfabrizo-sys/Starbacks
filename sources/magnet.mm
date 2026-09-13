@@ -1,5 +1,5 @@
 // magnet.mm
-// Aim Magnet — порт логики AXL MODSX. Пишем в ROOT transform (0x660).
+// Aim Magnet — быстрый тик, жёсткая привязка, авто-релиз по таймауту
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -17,12 +17,11 @@ extern bool     aimMagnet;
 
 // ═══════════════════════════════════════════════════════════════════
 //  РЕЖИМ
-//  0 = писать в ROOT (0x660) — рекомендую
-//  1 = писать в HEAD (0x638) — если root не работает
+//  0 = root (0x660)   1 = head (0x638)
 // ═══════════════════════════════════════════════════════════════════
 static constexpr int kMagMode = 0;
 
-// ─── Player field offsets ───────────────────────────────────────────
+// ─── Offsets ────────────────────────────────────────────────────────
 static constexpr uint64_t kMag_HeadNode = 0x638;
 static constexpr uint64_t kMag_RootNode = 0x660;
 static constexpr uint64_t kMag_BodyPart = 0x10;
@@ -31,12 +30,13 @@ static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
 // ─── Tuning ─────────────────────────────────────────────────────────
-static constexpr float kMagStrength   = 0.20f;
-static constexpr float kMagHeadOffset = 1.5f;
-static constexpr float kMagMaxDist    = 60.0f;
-static constexpr float kMagMinDist    = 0.8f;
-static constexpr int   kMagTickMs     = 16;
-static constexpr float kMagMaxDelta   = 0.20f;
+static constexpr float kMagStrength    = 0.55f;    // ↑↑ против анимации
+static constexpr float kMagHeadOffset  = 1.5f;
+static constexpr float kMagMaxDist     = 80.0f;
+static constexpr float kMagMinDist     = 0.6f;
+static constexpr int   kMagTickMs      = 8;        // 120 Hz — быстрее кадра
+static constexpr float kMagMaxDelta    = 1.50f;    // ↑↑ больше шаг
+static constexpr int   kMagReleaseMs   = 200;      // если нет данных — релиз
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        mag_lock;
@@ -47,6 +47,9 @@ static uint64_t mag_candidate = 0;
 static Vector3  mag_camPos    = {};
 static Vector3  mag_camFwd    = {};
 static uint64_t mag_locked    = 0;
+
+static std::chrono::steady_clock::time_point mag_lastUpdate =
+    std::chrono::steady_clock::now();
 
 // ─── Utils ──────────────────────────────────────────────────────────
 static inline float vlen3(Vector3 v) { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
@@ -63,7 +66,6 @@ static Vector3 HeadWorld(uint64_t pawn) {
     return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
 }
 
-// root world position — читаем через цепочку 0x660 -> +0x10 -> Transform
 static Vector3 RootWorld(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
     uint64_t node = ReadAddr<uint64_t>(pawn + kMag_RootNode);
@@ -73,7 +75,6 @@ static Vector3 RootWorld(uint64_t pawn) {
     return getPositionExt(tf);
 }
 
-// получить указатель на matrix head или root
 static uint64_t MatPtr(uint64_t pawn, uint64_t nodeOff) {
     if (!isVaildPtr(pawn)) return 0;
     uint64_t node = ReadAddr<uint64_t>(pawn + nodeOff);
@@ -102,13 +103,6 @@ static bool WriteLocalAt(uint64_t pawn, uint64_t nodeOff, Vector3 pos) {
 }
 
 // ─── Core step ──────────────────────────────────────────────────────
-// Логика как в AXL MODSX:
-//   head     = мировая голова
-//   targetPt = camPos + camFwd * dist        (точка на луче на глубине головы)
-//   rootTgt  = targetPt - (0, headOffset, 0)  (целевая позиция root)
-//   delta    = rootTgt - curRootWorld         (мировая дельта)
-//   step     = delta * strength, огранич. kMagMaxDelta
-//   newLocal = curLocal + step
 static bool ComputeMagnetStep(uint64_t pawn,
                               const Vector3& camPos,
                               const Vector3& camFwd,
@@ -168,6 +162,15 @@ static void MagnetWorker() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kMagTickMs));
 
+        // Авто-релиз: если давно не было данных — отпускаем цель
+        auto now = std::chrono::steady_clock::now();
+        auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - mag_lastUpdate).count();
+        if (since > kMagReleaseMs) {
+            mag_locked = 0;
+            continue;
+        }
+
         if (!mag_hasData.load(std::memory_order_acquire)) {
             mag_locked = 0;
             continue;
@@ -214,7 +217,8 @@ void InitMagnetThread() {
 void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward, bool isFiring) {
     InitMagnetThread();
 
-    if (!aimMagnet || !isFiring) {
+    // Если не стреляем или нет цели — сразу стоп
+    if (!aimMagnet || !isFiring || !isVaildPtr(target)) {
         mag_hasData.store(false, std::memory_order_release);
         return;
     }
@@ -225,6 +229,7 @@ void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward, bool isFi
         mag_camPos    = camPos;
         mag_camFwd    = camForward;
     }
+    mag_lastUpdate = std::chrono::steady_clock::now();
     mag_hasData.store(true, std::memory_order_release);
 }
 
