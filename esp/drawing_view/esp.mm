@@ -685,7 +685,8 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
-            if (!isAimCheckVisible && !aimVis)    valid = NO;
+            // NOTE: aimMagnet работает и на невидимых, чтобы вытаскивать из-за стен
+            if (!isAimCheckVisible && !aimVis && !aimMagnet) valid = NO;
 
             if (valid) {
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix, (float)screenVpW, (float)screenVpH, (float)vw, (float)vh);
@@ -783,7 +784,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     else
         ResetSilentAim();
 
-    // ── Aim Magnet — forward берём из кватерниона прицеливания ─────
+    // ── Aim Magnet — forward из кватерниона прицеливания ───────────
     if (aimMagnet) {
         bool firing = get_IsFiring(myPawn);
 
