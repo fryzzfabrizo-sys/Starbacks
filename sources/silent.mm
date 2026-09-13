@@ -1,197 +1,137 @@
-// magnet.mm
-// Aim Magnet через root transform. Быстрый тик + большая сила.
+// SilentAim.mm
+// Silent aim строго через ITransformNode головы (offset 0x638)
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
-#import "../esp/drawing_view/offset.h"
 #import "mahoa.h"
-#include <cmath>
 #include <atomic>
-#include <chrono>
 #include <mutex>
 #include <thread>
+#include <cmath>
 
+extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
-extern bool     aimMagnet;
+extern bool     aimsilent1;
 
-// ─── Offsets ────────────────────────────────────────────────────────
-static constexpr uint64_t kMag_HeadNode = 0x638;
-static constexpr uint64_t kMag_RootNode = 0x660;
-static constexpr uint64_t kMag_BodyPart = 0x10;
-static constexpr uint64_t kMag_Inner    = 0x10;
-static constexpr uint64_t kMag_Matrix   = 0x38;
-static constexpr uint64_t kMag_PosOff   = 0x90;
+static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
+static constexpr uint64_t kHit_RayDir         = 0x40;
+static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kPlayer_HeadNode    = 0x638;
+static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
-// ─── Tuning ─────────────────────────────────────────────────────────
-static constexpr float kMagStrength   = 0.65f;    // ↑↑ против анимации
-static constexpr float kMagHeadOffset = 1.5f;
-static constexpr float kMagMaxDist    = 80.0f;
-static constexpr float kMagMinDist    = 1.0f;
-static constexpr int   kMagTickMs     = 4;        // 250 Hz — быстрее кадра
-static constexpr int   kMagReleaseMs  = 200;
+static std::mutex        g_lock;
+static std::atomic<bool> g_hasData{false};
+static std::atomic<bool> g_started{false};
+static uint64_t          g_aimPtr    = 0;
+static Vector3           g_tPos      = {};
+static uint64_t          g_lastMatch = 0;
 
-// ─── State ──────────────────────────────────────────────────────────
-static std::mutex        mag_lock;
-static std::atomic<bool> mag_hasData{false};
-static std::atomic<bool> mag_started{false};
-
-static uint64_t mag_candidate = 0;
-static Vector3  mag_camPos    = {};
-static Vector3  mag_camFwd    = {};
-static uint64_t mag_locked    = 0;
-
-static std::chrono::steady_clock::time_point mag_lastUpdate =
-    std::chrono::steady_clock::now();
-
-// ─── Utils ──────────────────────────────────────────────────────────
-static inline float vlen3(Vector3 v) { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
-static inline bool  isZero3(Vector3 v) { return v.x==0.f && v.y==0.f && v.z==0.f; }
-static inline bool  isSane3(Vector3 v) {
-    if (!isfinite(v.x) || !isfinite(v.y) || !isfinite(v.z)) return false;
-    if (fabsf(v.x) > 20000.f || fabsf(v.y) > 20000.f || fabsf(v.z) > 20000.f) return false;
-    return true;
+static inline bool validPtr(uint64_t p) {
+    return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
 
-static Vector3 HeadWorld(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return {};
-    uint64_t t = getHead(pawn);
-    return isVaildPtr(t) ? getPositionExt(t) : Vector3{};
+static inline bool validVec(const Vector3& v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
+           !(v.x == 0.f && v.y == 0.f && v.z == 0.f);
 }
 
-static Vector3 RootWorld(uint64_t pawn) {
-    if (!isVaildPtr(pawn)) return {};
-    uint64_t node = ReadAddr<uint64_t>(pawn + kMag_RootNode);
-    if (!isVaildPtr(node)) return {};
-    uint64_t tf = ReadAddr<uint64_t>(node + kMag_BodyPart);
-    if (!isVaildPtr(tf)) return {};
-    return getPositionExt(tf);
+static Vector3 HeadPos(uint64_t pawn) {
+    if (!validPtr(pawn)) return {};
+    uint64_t bodyPart = ReadAddr<uint64_t>(pawn + kPlayer_HeadNode);
+    if (!validPtr(bodyPart)) return {};
+    uint64_t node = ReadAddr<uint64_t>(bodyPart + kBodyPart_TransNode);
+    if (!validPtr(node)) return {};
+    return getPositionExt(node);
 }
 
-static uint64_t MatPtr(uint64_t pawn, uint64_t nodeOff) {
-    if (!isVaildPtr(pawn)) return 0;
-    uint64_t node = ReadAddr<uint64_t>(pawn + nodeOff);
-    if (!isVaildPtr(node)) return 0;
-    uint64_t tf = ReadAddr<uint64_t>(node + kMag_BodyPart);
-    if (!isVaildPtr(tf)) return 0;
-    uint64_t p3 = ReadAddr<uint64_t>(tf + kMag_Inner);
-    if (!isVaildPtr(p3)) return 0;
-    uint64_t mat = ReadAddr<uint64_t>(p3 + kMag_Matrix);
-    return isVaildPtr(mat) ? mat : 0;
-}
-
-static bool WriteLocalAt(uint64_t pawn, uint64_t nodeOff, Vector3 pos) {
-    if (!isSane3(pos)) return false;
-    uint64_t mat = MatPtr(pawn, nodeOff);
-    if (!isVaildPtr(mat)) return false;
-    WriteAddr<Vector3>(mat + kMag_PosOff, pos);
-    return true;
-}
-
-// ─── Core ───────────────────────────────────────────────────────────
-static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& camFwd) {
-    Vector3 headW = HeadWorld(pawn);
-    if (!isSane3(headW) || isZero3(headW)) return false;
-
-    float dist = vlen3({headW.x - camPos.x, headW.y - camPos.y, headW.z - camPos.z});
-    if (dist < kMagMinDist || dist > kMagMaxDist) return false;
-
-    Vector3 targetPt = {
-        camPos.x + camFwd.x * dist,
-        camPos.y + camFwd.y * dist,
-        camPos.z + camFwd.z * dist
-    };
-
-    Vector3 rootTgtWorld = {
-        targetPt.x,
-        targetPt.y - kMagHeadOffset,
-        targetPt.z
-    };
-
-    Vector3 curRootW = RootWorld(pawn);
-    if (!isSane3(curRootW) || isZero3(curRootW)) return false;
-
-    Vector3 lerped = {
-        curRootW.x + (rootTgtWorld.x - curRootW.x) * kMagStrength,
-        curRootW.y + (rootTgtWorld.y - curRootW.y) * kMagStrength,
-        curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
-    };
-
-    return WriteLocalAt(pawn, kMag_RootNode, lerped);
-}
-
-// ─── Worker ─────────────────────────────────────────────────────────
-static void MagnetWorker() {
+static void SilentWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(kMagTickMs));
-
-        auto now = std::chrono::steady_clock::now();
-        auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now - mag_lastUpdate).count();
-        if (since > kMagReleaseMs) {
-            mag_locked = 0;
+        if (!g_hasData.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
             continue;
         }
 
-        if (!mag_hasData.load(std::memory_order_acquire)) {
-            mag_locked = 0;
-            continue;
-        }
-
-        uint64_t candidate;
-        Vector3  camPos, camFwd;
+        uint64_t h;
+        Vector3  tPos;
         {
-            std::lock_guard<std::mutex> lk(mag_lock);
-            candidate = mag_candidate;
-            camPos    = mag_camPos;
-            camFwd    = mag_camFwd;
+            std::lock_guard<std::mutex> lk(g_lock);
+            h    = g_aimPtr;
+            tPos = g_tPos;
         }
 
-        if (!isVaildPtr(mag_locked)) {
-            if (isVaildPtr(candidate) && get_CurHP(candidate) > 0) {
-                mag_locked = candidate;
-            }
-            if (!isVaildPtr(mag_locked)) continue;
-        }
-
-        if (get_CurHP(mag_locked) <= 0) {
-            mag_locked = 0;
+        if (!validPtr(h) || !validVec(tPos)) {
+            std::this_thread::yield();
             continue;
         }
 
-        ApplyMagnet(mag_locked, camPos, camFwd);
+        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        Vector3 diff   = { tPos.x - origin.x,
+                           tPos.y - origin.y,
+                           tPos.z - origin.z };
+        WriteAddr<Vector3>(h + kHit_RayDir, diff);
     }
 }
 
-void InitMagnetThread() {
+void InitSilentAimThread() {
     bool exp = false;
-    if (mag_started.compare_exchange_strong(exp, true))
-        std::thread(MagnetWorker).detach();
+    if (g_started.compare_exchange_strong(exp, true))
+        std::thread(SilentWorker).detach();
 }
 
-void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward, bool isFiring) {
-    InitMagnetThread();
+void ResetSilentAim() {
+    g_hasData.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> lk(g_lock);
+    g_aimPtr = 0;
+    g_tPos   = {};
+}
 
-    if (!aimMagnet || !isFiring || !isVaildPtr(target)) {
-        mag_hasData.store(false, std::memory_order_release);
+void RunSilentAim() {
+    InitSilentAimThread();
+
+    if (!aimsilent1 || IsAtLobby(Moudule_Base) || !validPtr(cachedMatch)) {
+        g_lastMatch = 0;
+        ResetSilentAim();
+        return;
+    }
+
+    if (cachedMatch != g_lastMatch) {
+        ResetSilentAim();
+        g_lastMatch = cachedMatch;
+        return;
+    }
+
+    uint64_t local  = getLocalPlayer(cachedMatch);
+    uint64_t target = g_SilentBestTarget;
+
+    if (!validPtr(local) || !validPtr(target)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
+    if (!validPtr(aimPtr)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    Vector3 tPos = HeadPos(target);
+    if (!validVec(tPos)) {
+        g_hasData.store(false, std::memory_order_release);
         return;
     }
 
     {
-        std::lock_guard<std::mutex> lk(mag_lock);
-        mag_candidate = target;
-        mag_camPos    = camPos;
-        mag_camFwd    = camForward;
+        std::lock_guard<std::mutex> lk(g_lock);
+        g_aimPtr = aimPtr;
+        g_tPos   = tPos;
     }
-    mag_lastUpdate = std::chrono::steady_clock::now();
-    mag_hasData.store(true, std::memory_order_release);
-}
+    g_hasData.store(true, std::memory_order_release);
 
-void ResetAimMagnet() {
-    mag_hasData.store(false, std::memory_order_release);
-    std::lock_guard<std::mutex> lk(mag_lock);
-    mag_candidate = 0;
-    mag_camPos    = {};
-    mag_camFwd    = {};
-    mag_locked    = 0;
+    // Немедленная запись в том же кадре (не ждём Worker)
+    Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+    Vector3 diff   = { tPos.x - origin.x,
+                       tPos.y - origin.y,
+                       tPos.z - origin.z };
+    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
 }
