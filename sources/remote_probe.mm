@@ -1,5 +1,5 @@
 // remote_probe.mm
-// Диагностическая версия — пошаговый дамп состояния потока
+// Remote call test с thread_resume + vm_msync
 
 #import <Foundation/Foundation.h>
 #include <mach/mach.h>
@@ -89,18 +89,13 @@ static uint64_t RemoteCall2(mach_port_t task, uint64_t func, uint64_t a0, uint64
     LogToFile("[RC] landing alloc = 0x%llx (kr=%d)", (unsigned long long)landing, krAlloc);
     if (!landing) return 0;
 
-    // wfe; b .-4 — wait forever
+    // wfe; b .-4
     uint32_t loopInsn[2] = { 0xD503205F, 0x17FFFFFF };
-    bool wOK = VMWrite(task, landing, loopInsn, 8);
-    LogToFile("[RC] landing write = %s", wOK ? "OK" : "FAIL");
+    VMWrite(task, landing, loopInsn, 8);
 
-    uint32_t check[2] = {0};
-    VMRead(task, landing, check, 8);
-    LogToFile("[RC] landing verify: %08x %08x", check[0], check[1]);
-
-    uint32_t codeCheck[2] = {0};
-    VMRead(task, func, codeCheck, 8);
-    LogToFile("[RC] func code: %08x %08x", codeCheck[0], codeCheck[1]);
+    // Сброс I-cache
+    vm_msync(task, (vm_address_t)landing, 0x1000, VM_SYNC_INVALIDATE);
+    vm_msync(task, (vm_address_t)func,    0x1000, VM_SYNC_INVALIDATE);
 
     arm_thread_state64_t ts;
     memset(&ts, 0, sizeof(ts));
@@ -109,6 +104,7 @@ static uint64_t RemoteCall2(mach_port_t task, uint64_t func, uint64_t a0, uint64
     ts.__sp   = sp;
     ts.__lr   = landing;
     ts.__pc   = func;
+    ts.__cpsr = 0;
 
     thread_act_t th;
     kern_return_t tkr = thread_create_running(task,
@@ -118,6 +114,12 @@ static uint64_t RemoteCall2(mach_port_t task, uint64_t func, uint64_t a0, uint64
                                               &th);
     LogToFile("[RC] thread_create kr=%d th=0x%x", tkr, th);
     if (tkr != KERN_SUCCESS) return 0;
+
+    // ЯВНЫЙ RESUME (iOS 14+ не запускает автоматом)
+    kern_return_t rkr = thread_resume(th);
+    LogToFile("[RC] thread_resume kr=%d", rkr);
+
+    usleep(3000);
 
     uint64_t result = 0;
     uint64_t lastPC = 0;
@@ -162,7 +164,7 @@ static uint64_t RemoteCall2(mach_port_t task, uint64_t func, uint64_t a0, uint64
         lastPC = pcM;
 
         if (stuck > 20) {
-            LogToFile("[RC] STUCK at PC=0x%llx (last 20 iters no change)", (unsigned long long)pcM);
+            LogToFile("[RC] STUCK at PC=0x%llx", (unsigned long long)pcM);
             break;
         }
     }
@@ -172,7 +174,7 @@ static uint64_t RemoteCall2(mach_port_t task, uint64_t func, uint64_t a0, uint64
 
 extern "C" void ProbeRemote() {
     remove(kLogPath);
-    LogToFile("========== REMOTE CALL TEST 4 ==========");
+    LogToFile("========== REMOTE CALL TEST 5 ==========");
 
     int pid = GetGameProcesspid((char*)"FreeFire");
     if (pid <= 0) { LogToFile("pid not found"); return; }
