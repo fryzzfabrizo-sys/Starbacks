@@ -1,5 +1,5 @@
 // silent.mm
-// Silent aim + диагностика путей до HeadCollider
+// Silent aim + StartPos у цели — обход стен для регистрации урона
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -8,8 +8,6 @@
 #include <mutex>
 #include <thread>
 #include <cmath>
-#include <chrono>
-#include <cstdio>
 
 extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
@@ -19,19 +17,13 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kHit_OrgStrtPos     = 0x74;   // дубликат старта, некоторые билды читают его
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;
 static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
-// диагностические пути
-static constexpr uint64_t kPlayer_AimCollider = 0x6C8;
-static constexpr uint64_t kPlayer_LockAimCol  = 0x140;
-static constexpr uint64_t kPlayer_FollowCam   = 0x620;
-static constexpr uint64_t kPlayer_Attributes  = 0x700;
-static constexpr uint64_t kHit_HeadCollider   = 0x20;
-static constexpr uint64_t kHit_HitLoc         = 0x28;
-static constexpr uint64_t kHit_GameObject     = 0x18;
+//  Отступ от цели, куда кладём StartPos. Подбирается.
+static constexpr float kStartOffset = 0.05f;
 
-// ─── State ──────────────────────────────────────────────────────────
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
 static std::atomic<bool> g_started{false};
@@ -39,10 +31,6 @@ static uint64_t          g_aimPtr    = 0;
 static Vector3           g_tPos      = {};
 static uint64_t          g_lastMatch = 0;
 
-static std::chrono::steady_clock::time_point g_lastLog =
-    std::chrono::steady_clock::now();
-
-// ─── Helpers ────────────────────────────────────────────────────────
 static inline bool validPtr(uint64_t p) {
     return p >= 0x100000000ULL && p <= 0x0000FFFFFFFFFFFFULL;
 }
@@ -61,18 +49,8 @@ static Vector3 HeadPos(uint64_t pawn) {
     return getPositionExt(node);
 }
 
-static void LogLine(const char* fmt, ...) {
-    FILE* f = fopen("/var/mobile/Documents/sa_diag.log", "a");
-    if (!f) return;
-    va_list args;
-    va_start(args, fmt);
-    vfprintf(f, fmt, args);
-    va_end(args);
-    fputc('\n', f);
-    fclose(f);
-}
+static inline float vlen3(Vector3 v) { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
 
-// ─── Worker ─────────────────────────────────────────────────────────
 static void SilentWorker() {
     while (true) {
         if (!g_hasData.load(std::memory_order_acquire)) {
@@ -80,13 +58,12 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h, target;
+        uint64_t h;
         Vector3  tPos;
         {
             std::lock_guard<std::mutex> lk(g_lock);
-            h      = g_aimPtr;
-            tPos   = g_tPos;
-            target = g_SilentBestTarget;
+            h    = g_aimPtr;
+            tPos = g_tPos;
         }
 
         if (!validPtr(h) || !validVec(tPos)) {
@@ -94,48 +71,36 @@ static void SilentWorker() {
             continue;
         }
 
-        // Пишем только RayDir (рабочий вариант)
+        // оригинальный StartPos (для направления)
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
-        Vector3 diff   = { tPos.x - origin.x,
-                           tPos.y - origin.y,
-                           tPos.z - origin.z };
-        WriteAddr<Vector3>(h + kHit_RayDir, diff);
 
-        // ── Диагностика: раз в 500 мс ──────────────────────────────
-        auto now = std::chrono::steady_clock::now();
-        auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       now - g_lastLog).count();
-        if (ms < 500) continue;
-        g_lastLog = now;
+        // вектор направления к цели (не нормализуем — игра сама)
+        Vector3 diff = { tPos.x - origin.x,
+                         tPos.y - origin.y,
+                         tPos.z - origin.z };
 
-        if (!validPtr(target)) continue;
+        // нормаль направления — нужна для отступа
+        float dlen = vlen3(diff);
+        if (dlen < 0.01f) continue;
+        Vector3 dirN = { diff.x / dlen, diff.y / dlen, diff.z / dlen };
 
-        uint64_t c6C8       = ReadAddr<uint64_t>(target + kPlayer_AimCollider);
-        uint64_t c140       = ReadAddr<uint64_t>(target + kPlayer_LockAimCol);
-        uint64_t c6C8_10    = validPtr(c6C8) ? ReadAddr<uint64_t>(c6C8 + 0x10) : 0;
-        uint64_t c6C8_18    = validPtr(c6C8) ? ReadAddr<uint64_t>(c6C8 + 0x18) : 0;
-        uint64_t c140_10    = validPtr(c140) ? ReadAddr<uint64_t>(c140 + 0x10) : 0;
-        uint64_t fc         = ReadAddr<uint64_t>(target + kPlayer_FollowCam);
-        uint64_t attrs      = ReadAddr<uint64_t>(target + kPlayer_Attributes);
-        uint64_t attrs_140  = validPtr(attrs) ? ReadAddr<uint64_t>(attrs + 0x140) : 0;
+        // StartPos сдвигаем за 5 см до цели (чтобы raycast не долетал до стен)
+        Vector3 newStart = {
+            tPos.x - dirN.x * kStartOffset,
+            tPos.y - dirN.y * kStartOffset,
+            tPos.z - dirN.z * kStartOffset
+        };
 
-        // HitInfo текущий (эталон — сюда игра пишет сама при реальном попадании)
-        uint64_t hiCol      = ReadAddr<uint64_t>(h + kHit_HeadCollider);
-        uint64_t hiGO       = ReadAddr<uint64_t>(h + kHit_GameObject);
-        Vector3  hiLoc      = ReadAddr<Vector3>(h + kHit_HitLoc);
+        // RayDir — короткий вектор от newStart к цели
+        Vector3 newRay = {
+            tPos.x - newStart.x,
+            tPos.y - newStart.y,
+            tPos.z - newStart.z
+        };
 
-        LogLine("[SA-DIAG] tgt=0x%llx  hitInfo=0x%llx", target, h);
-        LogLine("  HI.Col      = 0x%llx   <-- ЭТАЛОН", hiCol);
-        LogLine("  HI.GameObj  = 0x%llx", hiGO);
-        LogLine("  HI.HitLoc   = (%.2f, %.2f, %.2f)", hiLoc.x, hiLoc.y, hiLoc.z);
-        LogLine("  Player+6C8  = 0x%llx", c6C8);
-        LogLine("  Player+140  = 0x%llx", c140);
-        LogLine("  6C8+10      = 0x%llx", c6C8_10);
-        LogLine("  6C8+18      = 0x%llx", c6C8_18);
-        LogLine("  140+10      = 0x%llx", c140_10);
-        LogLine("  Player+620  = 0x%llx", fc);
-        LogLine("  Attrs+140   = 0x%llx", attrs_140);
-        LogLine("  ---");
+        WriteAddr<Vector3>(h + kHit_StartPos,   newStart);
+        WriteAddr<Vector3>(h + kHit_OrgStrtPos, newStart);   // дублируем
+        WriteAddr<Vector3>(h + kHit_RayDir,     newRay);
     }
 }
 
@@ -194,9 +159,27 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
+    // мгновенная запись в кадре
     Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
     Vector3 diff   = { tPos.x - origin.x,
                        tPos.y - origin.y,
                        tPos.z - origin.z };
-    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
+    float dlen = vlen3(diff);
+    if (dlen < 0.01f) return;
+
+    Vector3 dirN = { diff.x / dlen, diff.y / dlen, diff.z / dlen };
+    Vector3 newStart = {
+        tPos.x - dirN.x * kStartOffset,
+        tPos.y - dirN.y * kStartOffset,
+        tPos.z - dirN.z * kStartOffset
+    };
+    Vector3 newRay = {
+        tPos.x - newStart.x,
+        tPos.y - newStart.y,
+        tPos.z - newStart.z
+    };
+
+    WriteAddr<Vector3>(aimPtr + kHit_StartPos,   newStart);
+    WriteAddr<Vector3>(aimPtr + kHit_OrgStrtPos, newStart);
+    WriteAddr<Vector3>(aimPtr + kHit_RayDir,     newRay);
 }
