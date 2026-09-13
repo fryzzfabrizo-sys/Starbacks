@@ -7,52 +7,40 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// ===== KÍCH THƯỚC - GIỮ NGUYÊN =====
-static const CGFloat kPanelWidth = 370.0f;  
-static const CGFloat kPanelHeight = 300.0f; 
+// ===== KÍCH THƯỚC =====
+static const CGFloat kPanelWidth = 370.0f;
+static const CGFloat kPanelHeight = 300.0f;
 static const CGFloat kHeaderHeight = 44.0f;
 static const CGFloat kSideTabWidth = 90.0f;
 static const CGFloat kRowHeight = 38.0f;
 static const CGFloat kScrollBarWidth = 3.0f;
 static const CGFloat kCheckboxSize = 20.0f;
 
-// ========== MÀU SẮC MỚI - BẾ NGUYÊN TỪ IMGUI ==========
-// Màu nền chính: Xanh than nhạt trong suốt (WindowBg ImGui)
-#define kColorMenuBG [UIColor colorWithRed:0.12f green:0.22f blue:0.32f alpha:0.55f] 
-
-// Màu chủ đạo cho nút, tab, checkbox (Thay vì màu xanh nước biển đậm, lấy màu chủ đạo của ImGui)
-#define kColorAccent [UIColor colorWithRed:0.18f green:0.32f blue:0.48f alpha:0.85f] 
+// ========== MÀU SẮC ==========
+#define kColorMenuBG [UIColor colorWithRed:0.12f green:0.22f blue:0.32f alpha:0.55f]
+#define kColorAccent [UIColor colorWithRed:0.18f green:0.32f blue:0.48f alpha:0.85f]
 #define kColorAccentBorder [UIColor colorWithRed:0.18f green:0.32f blue:0.48f alpha:0.55f]
-
-// Màu Header & Tab background
-#define kColorHeaderBG [UIColor colorWithRed:0.12f green:0.25f blue:0.38f alpha:0.50f] 
+#define kColorHeaderBG [UIColor colorWithRed:0.12f green:0.25f blue:0.38f alpha:0.50f]
 #define kColorTabInactive [UIColor colorWithRed:0.12f green:0.22f blue:0.32f alpha:0.35f]
-
-// Màu viền & phân cách
 #define kColorBorder [UIColor colorWithRed:0.80f green:0.85f blue:0.90f alpha:0.15f]
 #define kColorSeparator [UIColor colorWithRed:0.80f green:0.85f blue:0.90f alpha:0.10f]
-
-// Màu chữ: Trắng tinh
 #define kColorText [UIColor colorWithWhite:1.0f alpha:1.0f]
 #define kColorMuted [UIColor colorWithWhite:0.85f alpha:0.70f]
-
-// Checkbox & Slider màu
 #define kColorCheckOn kColorAccent
 #define kColorCheckBorder [UIColor colorWithWhite:1.0f alpha:0.40f]
-
-// Màu nút Exit HUD (Giữ nguyên đỏ nhạt cho nổi bật)
 #define kColorDangerBG [UIColor colorWithRed:1.00f green:0.23f blue:0.19f alpha:0.20f]
 #define kColorDanger [UIColor colorWithRed:1.00f green:0.26f blue:0.26f alpha:1.0f]
-
-// Slider & Segmented
 #define kColorSliderTrack [UIColor colorWithWhite:1.0f alpha:0.20f]
 #define kColorSliderFill kColorAccent
 #define kColorSegActive [UIColor colorWithWhite:1.0f alpha:0.15f]
 #define kColorSegBG [UIColor colorWithRed:0.00f green:0.00f blue:0.00f alpha:0.35f]
-// ==========================================================
 
 static const NSInteger kSegmentTrackTag = 9101;
 static const NSInteger kSegmentLabelTag = 9201;
+
+// probe extern
+extern "C" void ProbeRemote();
+extern "C" void ProbeCapsule();
 
 typedef NS_ENUM(NSInteger, MenuTab) {
     MenuTabESP = 0,
@@ -73,6 +61,8 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 @property (nonatomic, assign) NSInteger trackingPointerId;
 @property (nonatomic, assign) BOOL touchOnClose;
 @property (nonatomic, assign) BOOL touchOnExitHUD;
+@property (nonatomic, assign) BOOL touchOnProbeRemote;
+@property (nonatomic, assign) BOOL touchOnProbeCapsule;
 @property (nonatomic, assign) BOOL menuDragging;
 @property (nonatomic, assign) CGPoint menuDragStartOrigin;
 @property (nonatomic, assign) CGPoint menuDragStartTouch;
@@ -95,7 +85,6 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 
 @implementation ModMenuViewController
 
-// ... (Tất cả các hàm setup bên dưới giữ nguyên y hệt, không cần thay đổi gì nữa) ...
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor clearColor];
@@ -152,15 +141,15 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     _floatingPanel = [[UIView alloc] initWithFrame:CGRectMake(pos.x, pos.y, kPanelWidth, kPanelHeight)];
     _floatingPanel.backgroundColor = [UIColor clearColor];
     _floatingPanel.layer.cornerRadius = 12.0f;
-    
+
     _floatingPanel.layer.borderWidth = 1.0f;
     _floatingPanel.layer.borderColor = kColorBorder.CGColor;
-    
+
     _floatingPanel.layer.shadowColor = [UIColor blackColor].CGColor;
     _floatingPanel.layer.shadowOpacity = 0.5f;
     _floatingPanel.layer.shadowRadius = 30.0f;
     _floatingPanel.layer.shadowOffset = CGSizeMake(0, 10);
-    
+
     _floatingPanel.layer.masksToBounds = NO;
     _floatingPanel.clipsToBounds = NO;
     [self.view addSubview:_floatingPanel];
@@ -182,7 +171,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     }
 
     UIView *bg = [[UIView alloc] initWithFrame:clip.bounds];
-    bg.backgroundColor = kColorMenuBG; 
+    bg.backgroundColor = kColorMenuBG;
     [clip addSubview:bg];
 }
 
@@ -254,19 +243,19 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         btn.frame = CGRectMake(5, ty, tabW, tabH);
         btn.layer.cornerRadius = 6.0f;
         btn.tag = i;
-        
+
         BOOL active = (i == _currentTab);
         btn.backgroundColor = active ? kColorAccent : [UIColor clearColor];
         btn.layer.borderWidth = active ? 0 : 1;
         btn.layer.borderColor = kColorBorder.CGColor;
-        
+
         [btn setTitle:tabTitles[i] forState:UIControlStateNormal];
         btn.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
         [btn setTitleColor:active ? [UIColor whiteColor] : kColorMuted forState:UIControlStateNormal];
-        
+
         btn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
         btn.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
-        
+
         [btn addTarget:self action:@selector(tabButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
         [tabBarBG addSubview:btn];
         [_tabButtons addObject:btn];
@@ -314,9 +303,6 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     _scrollbarThumb.tag = 5001;
     [contentClipView addSubview:_scrollbarThumb];
 }
-
-// ... (Các hàm updateScrollbarLayout, updateHeaderForTab, logic check box, loadTabContent giữ nguyên 100% so với code cũ bạn đã gửi) ...
-// Lưu ý: Hàm makeCheckbox và buildCheckboxCell dùng kColorCheckOn, kColorText đã được định nghĩa ở trên.
 
 - (void)updateScrollbarLayout {
     CGFloat contentH = _contentScrollView.contentSize.height;
@@ -428,7 +414,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     rv.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.03f];
     rv.layer.cornerRadius = 4.0f;
     objc_setAssociatedObject(rv, "key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    
+
     UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(0, frame.size.height - 1, frame.size.width, 1)];
     sep.backgroundColor = kColorSeparator;
     [rv addSubview:sep];
@@ -452,14 +438,14 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     for (UIView *v in _contentContainer.subviews) {
         [v removeFromSuperview];
     }
-    
+
     _contentScrollView.contentOffset = CGPointZero;
     [self stopScrollInertia];
     _scrollVelocity = 0;
 
     CGFloat contentWidth = _contentScrollView.bounds.size.width;
     _contentContainer.frame = CGRectMake(0, 0, contentWidth, _contentScrollView.bounds.size.height);
-    
+
     __block CGFloat y = 8.0f;
 
     // ===== TAB INFO =====
@@ -477,13 +463,13 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         auto createRow = ^(NSString *label, NSString *value, CGFloat currentY) {
             UIView *row = [[UIView alloc] initWithFrame:CGRectMake(startX, currentY, rowW, 24)];
             row.backgroundColor = [UIColor clearColor];
-            
+
             UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, rowW * 0.40, 24)];
             lbl.text = [NSString stringWithFormat:@"%@:", label];
             lbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
             lbl.textColor = kColorMuted;
             [row addSubview:lbl];
-            
+
             UILabel *val = [[UILabel alloc] initWithFrame:CGRectMake(rowW * 0.40, 0, rowW * 0.60, 24)];
             val.text = value;
             val.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
@@ -492,21 +478,69 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             val.adjustsFontSizeToFitWidth = YES;
             val.minimumScaleFactor = 0.75f;
             [row addSubview:val];
-            
+
             [_contentContainer addSubview:row];
             return currentY + 28;
         };
-        
+
         y = createRow(@"Tên Game", @"Garena Free Fire", y);
         y = createRow(@"Vison Game", @"1.126.1", y);
         y = createRow(@"Vison FFExt", @"v2.0.2", y);
-        
+
         y += 8;
         UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(startX, y, rowW, 1)];
         sep.backgroundColor = kColorSeparator;
         [_contentContainer addSubview:sep];
         y += 14;
-        
+
+        // ─── PROBE CAPSULE BUTTON ─────────────────────────────────
+        UIView *capsuleRow = [[UIView alloc] initWithFrame:CGRectMake(startX, y, rowW, kRowHeight)];
+        capsuleRow.backgroundColor = [UIColor colorWithRed:0.15f green:0.45f blue:0.30f alpha:0.55f];
+        capsuleRow.layer.cornerRadius = 6.0f;
+        capsuleRow.layer.borderWidth = 1.0f;
+        capsuleRow.layer.borderColor = kColorAccent.CGColor;
+        objc_setAssociatedObject(capsuleRow, "key", @"__probe_capsule__", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        UILabel *capsuleLbl = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, rowW - 12, kRowHeight)];
+        capsuleLbl.text = @"▶  Probe Capsule (log to file)";
+        capsuleLbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
+        capsuleLbl.textColor = [UIColor whiteColor];
+        [capsuleRow addSubview:capsuleLbl];
+        [_contentContainer addSubview:capsuleRow];
+        y += kRowHeight + 6;
+
+        UILabel *hint1 = [[UILabel alloc] initWithFrame:CGRectMake(startX, y, rowW, 30)];
+        hint1.text = @"Log → /var/mobile/Documents/capsule_dump.log";
+        hint1.font = [UIFont systemFontOfSize:10 weight:UIFontWeightRegular];
+        hint1.textColor = kColorMuted;
+        hint1.numberOfLines = 2;
+        [_contentContainer addSubview:hint1];
+        y += 34;
+
+        // ─── PROBE REMOTE BUTTON ──────────────────────────────────
+        UIView *probeRow = [[UIView alloc] initWithFrame:CGRectMake(startX, y, rowW, kRowHeight)];
+        probeRow.backgroundColor = [UIColor colorWithRed:0.15f green:0.35f blue:0.55f alpha:0.55f];
+        probeRow.layer.cornerRadius = 6.0f;
+        probeRow.layer.borderWidth = 1.0f;
+        probeRow.layer.borderColor = kColorAccent.CGColor;
+        objc_setAssociatedObject(probeRow, "key", @"__probe_remote__", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        UILabel *probeLbl = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, rowW - 12, kRowHeight)];
+        probeLbl.text = @"▶  Run Remote Probe (log to file)";
+        probeLbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
+        probeLbl.textColor = [UIColor whiteColor];
+        [probeRow addSubview:probeLbl];
+        [_contentContainer addSubview:probeRow];
+        y += kRowHeight + 6;
+
+        UILabel *hint2 = [[UILabel alloc] initWithFrame:CGRectMake(startX, y, rowW, 30)];
+        hint2.text = @"Log → /var/mobile/Documents/remote_probe.log";
+        hint2.font = [UIFont systemFontOfSize:10 weight:UIFontWeightRegular];
+        hint2.textColor = kColorMuted;
+        hint2.numberOfLines = 2;
+        [_contentContainer addSubview:hint2];
+        y += 34;
+
         UILabel *devTitle = [[UILabel alloc] initWithFrame:CGRectMake(startX, y, rowW, 20)];
         devTitle.text = @"DEVELOPER INFO";
         devTitle.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
@@ -516,7 +550,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 
         y = createRow(@"Admin Support", @"Telegram : @ktienxios", y);
         y = createRow(@"Product", @"TIPA FFExternal KTIEN IOS", y);
-        
+
         UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(startX, y + 12, rowW, 16)];
         foot.text = @"Build v2.0.2 — Starbacks HUD";
         foot.font = [UIFont italicSystemFontOfSize:10];
@@ -535,7 +569,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             @[ @"MEMORY FUNCTIONS", @"__section__" ],
             @[ @"No ReLoad", @"NoReLoad" ],
             @[ @"Vô Hạn Đạn", @"VohaDan" ],
-            @[ @"Cam Cao", @"camcao" ], 
+            @[ @"Cam Cao", @"camcao" ],
         ];
 
         CGFloat padX = 10.0f, gapX = 6.0f;
@@ -598,7 +632,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             @[ @"Enemy Count", @"Count" ],
             @[ @"Show Name", @"Name" ],
             @[ @"Bone Work", @"Bone" ],
-            @[ @"Show Distance", @"Dis" ], 
+            @[ @"Show Distance", @"Dis" ],
             @[ @"Radar Line", @"Line" ],
             @[ @"Show FOV Circle", @"ShowFov" ],
             @[ @"OTHER PREFS", @"__section__" ],
@@ -924,7 +958,9 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         if (_trackingPointerId != -1 && _trackingPointerId != pointerId) return NO;
 
         _trackingPointerId = pointerId;
-        _touchOnClose = _touchOnExitHUD = _menuDragging = NO;
+        _touchOnClose = _touchOnExitHUD = NO;
+        _touchOnProbeRemote = _touchOnProbeCapsule = NO;
+        _menuDragging = NO;
         _activeCheckbox = nil; _segmentedRowTracking = nil; _sliderTracking = nil;
         _isScrollingContent = NO;
         [self stopScrollInertia];
@@ -1006,7 +1042,9 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             }
 
             NSString *rk = objc_getAssociatedObject(rv, "key");
-            if ([rk isEqualToString:@"__exit_hud__"]) { _touchOnExitHUD = YES; break; }
+            if ([rk isEqualToString:@"__exit_hud__"])      { _touchOnExitHUD     = YES; break; }
+            if ([rk isEqualToString:@"__probe_capsule__"]) { _touchOnProbeCapsule = YES; break; }
+            if ([rk isEqualToString:@"__probe_remote__"])  { _touchOnProbeRemote  = YES; break; }
 
             for (UIView *sub in rv.subviews) {
                 if (objc_getAssociatedObject(sub, "isCheckbox")) { _activeCheckbox = sub; break; }
@@ -1014,7 +1052,9 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             break;
         }
 
-        if (!_activeCheckbox && !_touchOnExitHUD && !_segmentedRowTracking) {
+        if (!_activeCheckbox && !_touchOnExitHUD &&
+            !_touchOnProbeCapsule && !_touchOnProbeRemote &&
+            !_segmentedRowTracking) {
             for (UIView *v in _contentContainer.subviews) {
                 if ([v isKindOfClass:[UISlider class]] && CGRectContainsPoint(v.frame, inContent)) {
                     _sliderTracking = (UISlider *)v; break;
@@ -1068,7 +1108,11 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             CGFloat dy = point.y - _scrollLastTouchY;
             if (now - _scrollLastTime > 0.001) _scrollVelocity = -dy / (CGFloat)((now - _scrollLastTime) * 60.0);
             [self applyScrollDelta:-dy];
-            if (ABS(dy) > 3) { _isScrollingContent = YES; _activeCheckbox = nil; _segmentedRowTracking = nil; _touchOnExitHUD = NO; }
+            if (ABS(dy) > 3) {
+                _isScrollingContent = YES;
+                _activeCheckbox = nil; _segmentedRowTracking = nil;
+                _touchOnExitHUD = NO; _touchOnProbeCapsule = NO; _touchOnProbeRemote = NO;
+            }
             _scrollLastTouchY = point.y;
             _scrollLastTime = now;
             return YES;
@@ -1080,6 +1124,10 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 
         if (_touchOnClose) {
             [self closeTapped];
+        } else if (_touchOnProbeCapsule && !_isScrollingContent) {
+            ProbeCapsule();
+        } else if (_touchOnProbeRemote && !_isScrollingContent) {
+            ProbeRemote();
         } else if (_touchOnExitHUD && !_isScrollingContent && self.onExitHUDRequested) {
             self.onExitHUDRequested();
         } else if (_activeCheckbox && !_isScrollingContent) {
@@ -1101,7 +1149,9 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         }
 
         _trackingPointerId = -1;
-        _touchOnClose = _touchOnExitHUD = _menuDragging = _scrollbarDragging = NO;
+        _touchOnClose = _touchOnExitHUD = NO;
+        _touchOnProbeCapsule = _touchOnProbeRemote = NO;
+        _menuDragging = _scrollbarDragging = NO;
         _activeCheckbox = nil; _segmentedRowTracking = nil; _sliderTracking = nil;
         _isScrollingContent = NO;
         return YES;
