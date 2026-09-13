@@ -29,13 +29,12 @@ static constexpr uint64_t kManaged_NativePtr             = 0x10;  // managed →
 static constexpr uint64_t kNative_RadiusOff              = 0x80;  // native + 0x80 = radius
 static constexpr uint64_t kNative_HeightOff              = 0x84;  // native + 0x84 = height
 
-// ─── Целевые размеры (baseline 0.48 / 1.60) ─────────────
-static constexpr float kBoostRadius = 0.70f;
-static constexpr float kBoostHeight = 2.20f;
+static constexpr float kBoostRadius = 1.20f;
+static constexpr float kBoostHeight = 3.50f;
 
 // Границы "здоровых" значений — защита от мусора
-static constexpr float kRadMin = 0.10f, kRadMax = 0.90f;
-static constexpr float kHeiMin = 0.80f, kHeiMax = 2.60f;
+static constexpr float kRadMin = 0.10f, kRadMax = 1.50f;
+static constexpr float kHeiMin = 0.80f, kHeiMax = 4.00f;
 
 static constexpr int kStartupDelayMs = 3000;
 static constexpr int kTickMs         = 40;
