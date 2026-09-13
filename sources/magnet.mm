@@ -1,7 +1,5 @@
 // magnet.mm
-// Aim Magnet через root transform (0x660).
-//   • displacement 7.00м — очень широкая зона магнита
-//   • strength 0.85 — почти мгновенно притягивает
+// Aim Magnet — максимум силы и дистанции.
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -24,14 +22,11 @@ static constexpr uint64_t kMag_Inner    = 0x10;
 static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
-// ─── Параметры магнита ──────────────────────────────────
-static constexpr float kMagStrength   = 0.85f;   // почти мгновенно
-static constexpr float kMagMaxDist    = 150.0f;
+// ─── Максимальные рабочие параметры ─────────────────────
+static constexpr float kMagStrength   = 1.00f;    // мгновенное притяжение
+static constexpr float kMagMaxDist    = 200.0f;
 static constexpr float kMagMinDist    = 1.0f;
-
-// Максимальное смещение модели от серверной позиции (метры, XZ).
-// Буст-radius = 8.00. Держим 7.00 — запас 1м.
-static constexpr float kMagMaxDisplacement = 7.00f;
+static constexpr float kMagMaxDisplacement = 10.00f; // внутри бустнутого коллайдера radius=12
 
 static constexpr int   kMagTickMs     = 4;
 static constexpr int   kMagReleaseMs  = 200;
@@ -107,28 +102,24 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
 
     if (!mag_originalRootValid) return false;
 
-    // Точка, куда смотрит прицел, на дистанции до врага
     Vector3 targetPt = {
         camPos.x + camFwd.x * dist,
         camPos.y + camFwd.y * dist,
         camPos.z + camFwd.z * dist
     };
 
-    // Root target — Y фиксируем, X/Z из линии прицела
     Vector3 rootTgtWorld = {
         targetPt.x,
         mag_originalRoot.y,
         targetPt.z
     };
 
-    // Lerp по XZ
     Vector3 lerped = {
         curRootW.x + (rootTgtWorld.x - curRootW.x) * kMagStrength,
         mag_originalRoot.y,
         curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
     };
 
-    // Clamp по XZ от исходной серверной позиции
     Vector3 deltaOrig = { lerped.x - mag_originalRoot.x, 0.0f, lerped.z - mag_originalRoot.z };
     float dOrig = vlen2xz(deltaOrig);
     if (dOrig > kMagMaxDisplacement && dOrig > 0.0001f) {
