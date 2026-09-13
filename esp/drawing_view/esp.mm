@@ -681,12 +681,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
         bool    aimVis   = getIsVisible(pawn);
         bool    espVis   = aimVis || isKnocked;
 
-        // ─── Выбор цели для магнита: ближайший к центру экрана ───
-        // Приоритет: магнит (если включён), потом аимбот/silent.
-        bool magnetPicking = aimMagnet && !isAimbot && !aimsilent1;
-        bool needPick = magnetPicking || ((isAimbot || aimsilent1) && dis <= aimDistance);
-
-        if (needPick) {
+        if ((isAimbot || aimsilent1 || aimMagnet) && dis <= aimDistance) {
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
@@ -696,55 +691,62 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix, (float)screenVpW, (float)screenVpH, (float)vw, (float)vh);
                 bool onScreen = (w2s.z > 0.001f);
 
-                // Для магнита — строго ближайший к центру экрана (2D)
-                if (magnetPicking) {
+                // Если Aimbot или Silent Aim активны — используем их приоритет.
+                // Иначе (только магнит) — берём ближайшего к центру экрана.
+                bool useAimPriority = isAimbot || aimsilent1;
+
+                if (useAimPriority) {
+                    // Приоритет как у aimbot/silent — тот же bestTarget
+                    if ((aimsilent1) && !isAimbot) {
+                        float score;
+                        if (onScreen) {
+                            float dx = w2s.x - center.x;
+                            float dy = w2s.y - center.y;
+                            score = dx * dx + dy * dy;
+                        } else {
+                            Quaternion aimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
+                            Vector3 fwd = {
+                                2.0f * (aimQ.x * aimQ.z + aimQ.w * aimQ.y),
+                                2.0f * (aimQ.y * aimQ.z - aimQ.w * aimQ.x),
+                                1.0f - 2.0f * (aimQ.x * aimQ.x + aimQ.y * aimQ.y)
+                            };
+                            Vector3 toT = { aimPos.x - myLoc.x, aimPos.y - myLoc.y, aimPos.z - myLoc.z };
+                            float len2 = toT.x * toT.x + toT.y * toT.y + toT.z * toT.z;
+                            if (len2 > 0.01f) {
+                                float inv = 1.0f / std::sqrt(len2);
+                                float dot = (toT.x * fwd.x + toT.y * fwd.y + toT.z * fwd.z) * inv;
+                                score = 1e9f + (1.0f - dot);
+                            } else {
+                                score = FLT_MAX;
+                            }
+                        }
+                        if (score < bestScore) {
+                            bestScore    = score;
+                            bestDistance = dis;
+                            bestTarget   = pawn;
+                            bestHeadPos  = aimPos;
+                        }
+                    } else {
+                        // aimbot
+                        if (onScreen) {
+                            float dx = w2s.x - center.x;
+                            float dy = w2s.y - center.y;
+                            float dSq = dx * dx + dy * dy;
+                            if (dSq <= aimFovSq && dSq < bestScore) {
+                                bestScore    = dSq;
+                                bestDistance = dis;
+                                bestTarget   = pawn;
+                                bestHeadPos  = aimPos;
+                            }
+                        }
+                    }
+                } else {
+                    // Только магнит — ближайший к центру экрана
                     if (onScreen) {
                         float dx = w2s.x - center.x;
                         float dy = w2s.y - center.y;
                         float dSq = dx * dx + dy * dy;
                         if (dSq < bestScore) {
-                            bestScore    = dSq;
-                            bestDistance = dis;
-                            bestTarget   = pawn;
-                            bestHeadPos  = aimPos;
-                        }
-                    }
-                } else if ((aimsilent1 || aimMagnet) && !isAimbot) {
-                    float score;
-                    if (onScreen) {
-                        float dx = w2s.x - center.x;
-                        float dy = w2s.y - center.y;
-                        score = dx * dx + dy * dy;
-                    } else {
-                        Quaternion aimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
-                        Vector3 fwd = {
-                            2.0f * (aimQ.x * aimQ.z + aimQ.w * aimQ.y),
-                            2.0f * (aimQ.y * aimQ.z - aimQ.w * aimQ.x),
-                            1.0f - 2.0f * (aimQ.x * aimQ.x + aimQ.y * aimQ.y)
-                        };
-                        Vector3 toT = { aimPos.x - myLoc.x, aimPos.y - myLoc.y, aimPos.z - myLoc.z };
-                        float len2 = toT.x * toT.x + toT.y * toT.y + toT.z * toT.z;
-                        if (len2 > 0.01f) {
-                            float inv = 1.0f / std::sqrt(len2);
-                            float dot = (toT.x * fwd.x + toT.y * fwd.y + toT.z * fwd.z) * inv;
-                            score = 1e9f + (1.0f - dot);
-                        } else {
-                            score = FLT_MAX;
-                        }
-                    }
-
-                    if (score < bestScore) {
-                        bestScore    = score;
-                        bestDistance = dis;
-                        bestTarget   = pawn;
-                        bestHeadPos  = aimPos;
-                    }
-                } else {
-                    if (onScreen) {
-                        float dx = w2s.x - center.x;
-                        float dy = w2s.y - center.y;
-                        float dSq = dx * dx + dy * dy;
-                        if (dSq <= aimFovSq && dSq < bestScore) {
                             bestScore    = dSq;
                             bestDistance = dis;
                             bestTarget   = pawn;
@@ -802,6 +804,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
         ResetSilentAim();
 
     // ── Aim Magnet (ТОЛЬКО в прицеле) ───────────────────────────────
+    // Работает вместе с aimbot и silent — берёт тот же bestTarget.
     if (aimMagnet) {
         bool scoping = get_IsScoping(myPawn);
 
