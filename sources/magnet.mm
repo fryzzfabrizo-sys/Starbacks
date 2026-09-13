@@ -2,7 +2,7 @@
 // Aim Magnet через root transform (0x660).
 //   • работает вместе с Aimbot и Silent Aim
 //   • Y НЕ меняется — фиксируется на исходной позиции врага
-//   • clamp по XZ = 2.00м (внутри бустнутого коллайдера radius=2.40 с запасом 0.4м)
+//   • displacement 4.00м — внутри бустнутого коллайдера radius=4.80
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -26,14 +26,14 @@ static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
 // ─── Параметры магнита ──────────────────────────────────
-static constexpr float kMagStrength   = 0.40f;
+static constexpr float kMagStrength   = 0.65f;   // 0.40 → 0.65, тянет сильнее
 static constexpr float kMagMaxDist    = 80.0f;
 static constexpr float kMagMinDist    = 1.0f;
 
 // Максимальное смещение модели от серверной позиции (метры, XZ).
-// Буст-radius = 2.40 (5× от 0.48). Держим 2.00 — запас 0.4м,
-// чтобы модель никогда не покидала бустнутый коллайдер.
-static constexpr float kMagMaxDisplacement = 2.00f;
+// Буст-radius = 4.80. Держим 4.00 — запас 0.8м,
+// модель всегда внутри бустнутого коллайдера.
+static constexpr float kMagMaxDisplacement = 4.00f;
 
 static constexpr int   kMagTickMs     = 4;
 static constexpr int   kMagReleaseMs  = 200;
@@ -123,7 +123,7 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
         targetPt.z
     };
 
-    // Lerp по XZ, Y не трогаем
+    // Lerp по XZ
     Vector3 lerped = {
         curRootW.x + (rootTgtWorld.x - curRootW.x) * kMagStrength,
         mag_originalRoot.y,
