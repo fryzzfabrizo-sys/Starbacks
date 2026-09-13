@@ -614,8 +614,6 @@ typedef NS_ENUM(NSInteger, MenuTab) {
             @[ @"Ignore Bot", @"AimIgnoreBot" ],
             @[ @"Ignore Knocked", @"AimIgnoreKnock" ],
             @[ @"Aim Line Speed", @"AimCheckVisible" ],
-            @[ @"HITBOX BOOST", @"__section__" ],
-            @[ @"Boost Hitbox", @"BoostHitbox" ],
             @[ @"HUD AUX BUTTON", @"__section__" ],
             @[ @"Float AIM Btn", (NSString *)NSSENCRYPT("FloatAimBtn") ],
         ];
