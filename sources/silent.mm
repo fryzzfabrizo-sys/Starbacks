@@ -1,6 +1,6 @@
 // SilentAim.mm
 // Silent aim через ITransformNode головы (0x638) + запись TargetPos (0x28) и RayDir (0x40) с упреждением
-// + форсирование Hit_Part = 1 (Head)
+// + диагностика Hit_HeadCollider (0x20)
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -17,14 +17,21 @@ extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
 // ─── Offsets ────────────────────────────────────────────────────────
-static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;   // LastAimInfo_Ptr (iOS)
+static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;   // LastAimInfo_Ptr
 static constexpr uint64_t kHit_RayDir         = 0x40;    // Vector3 RayDir
 static constexpr uint64_t kHit_StartPos       = 0x4C;    // Vector3 StartPos
 static constexpr uint64_t kHit_TargetPos      = 0x28;    // Vector3 TargetPos
-static constexpr uint64_t kHit_Part           = 0x64;    // int Part (0=Default, 1=Head, 2=Body)
+
+// Диагностика / эксперименты
+static constexpr uint64_t kHit_HeadCollider   = 0x20;    // uint64 HeadCollider (в HitInfo)
+static constexpr uint64_t kHit_SpecialHitType = 0x80;    // int SpecialHitType
 
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;   // ITransformNode Head
 static constexpr uint64_t kBodyPart_TransNode = 0x10;    // ITransformNode -> Transform
+
+// ─── Debug (читаем, не пишем) ───────────────────────────────────────
+static std::atomic<uint64_t> g_dbgHeadCollider{0};
+static std::atomic<int>      g_dbgSpecialHit{0};
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        g_lock;
@@ -34,7 +41,6 @@ static uint64_t          g_aimPtr    = 0;
 static Vector3           g_tPos      = {};
 static uint64_t          g_lastMatch = 0;
 
-// Переменные для расчета упреждения (Prediction)
 static Vector3           g_lastEnemyPos = {};
 static auto              g_lastTime     = std::chrono::high_resolution_clock::now();
 static uint64_t          g_lastTarget   = 0;
@@ -49,7 +55,6 @@ static inline bool validVec(const Vector3& v) {
            !(v.x == 0.f && v.y == 0.f && v.z == 0.f);
 }
 
-// Голова строго по оффсету: Player + 0x638 -> BodyPart + 0x10 -> Transform -> getPositionExt
 static Vector3 HeadPos(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
 
@@ -83,16 +88,22 @@ static void SilentWorker() {
             continue;
         }
 
-        // Динамическое чтение origin (ammoBase) в реальном времени
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
 
-        // Запись вектора направления, целевой позиции и форс-флага головы
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
         WriteAddr<Vector3>(h + kHit_TargetPos, tPos);
-        WriteAddr<int>(h + kHit_Part, 1);   // 1 = Head
+
+        // ─── Диагностика (только чтение) ───────────────────────────
+        uint64_t hc = ReadAddr<uint64_t>(h + kHit_HeadCollider);
+        int      st = ReadAddr<int>(h + kHit_SpecialHitType);
+        g_dbgHeadCollider.store(hc, std::memory_order_relaxed);
+        g_dbgSpecialHit.store(st,   std::memory_order_relaxed);
+
+        // Раскомментируй, чтобы логировать в консоль:
+        // NSLOG(@"[SA] HC=0x%llx  SHT=%d", hc, st);
     }
 }
 
@@ -147,14 +158,12 @@ void RunSilentAim() {
         return;
     }
 
-    // Сброс истории скорости при смене цели
     if (target != g_lastTarget) {
         g_lastEnemyPos = tPos;
         g_lastTarget   = target;
         g_lastTime     = std::chrono::high_resolution_clock::now();
     }
 
-    // Расчет скорости цели и предсказание позиции (Prediction)
     auto now = std::chrono::high_resolution_clock::now();
     float dt = std::chrono::duration<float>(now - g_lastTime).count();
 
@@ -168,7 +177,6 @@ void RunSilentAim() {
     g_lastEnemyPos = tPos;
     g_lastTime     = now;
 
-    // Время упреждения
     float predictionTime = 0.12f;
 
     Vector3 predictedPos = {
@@ -191,5 +199,10 @@ void RunSilentAim() {
 
     WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
     WriteAddr<Vector3>(aimPtr + kHit_TargetPos, predictedPos);
-    WriteAddr<int>(aimPtr + kHit_Part, 1);   // 1 = Head
+
+    // ─── Диагностика в кадре ───────────────────────────────────────
+    uint64_t hc = ReadAddr<uint64_t>(aimPtr + kHit_HeadCollider);
+    int      st = ReadAddr<int>(aimPtr + kHit_SpecialHitType);
+    g_dbgHeadCollider.store(hc, std::memory_order_relaxed);
+    g_dbgSpecialHit.store(st,   std::memory_order_relaxed);
 }
