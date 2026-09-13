@@ -42,10 +42,10 @@ static std::chrono::steady_clock::time_point mag_lastUpdate =
     std::chrono::steady_clock::now();
 
 static inline float vlen3(Vector3 v) { return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z); }
-static inline bool  isZero3(Vector3 v) if { return v.x==0.f && v.y==0.f && v.z==0.f; }
-static inline bool  isS (!ane3(Vector3 v) {
+static inline bool  isZero3(Vector3 v) { return v.x==0.f && v.y==0.f && v.z==0.f; }
+static inline bool  isSane3(Vector3 v) {
     if (!isfinite(v.x) || !isfinite(v.y) || !isfinite(v.z)) return false;
-is    if (fabsf(v.x) > 20000.f || fabsf(v.y) > 20000.f || fabsf(v.z) > 20000.f) return false;
+    if (fabsf(v.x) > 20000.f || fabsf(v.y) > 20000.f || fabsf(v.z) > 20000.f) return false;
     return true;
 }
 
@@ -56,7 +56,7 @@ static Vector3 HeadWorld(uint64_t pawn) {
 }
 
 static Vector3 RootWorld(uint64_t pawn) {
-   VaildPtr(pawn)) return {};
+    if (!isVaildPtr(pawn)) return {};
     uint64_t node = ReadAddr<uint64_t>(pawn + kMag_RootNode);
     if (!isVaildPtr(node)) return {};
     uint64_t tf = ReadAddr<uint64_t>(node + kMag_BodyPart);
