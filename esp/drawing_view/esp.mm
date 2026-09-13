@@ -3,6 +3,7 @@
 #import "../drawing_view/offset.h"
 #import "mahoa.h"
 #import "../../sources/silent.h"
+#import "../../sources/magnet.h"
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #import <notify.h>
@@ -42,6 +43,7 @@ bool isShowFov = NO;   // ← по умолчанию ВЫКЛ
 
 // ─── Silent Aim ──────────────────────────────
 bool aimsilent1 = NO;
+bool aimMagnet  = NO;
 uint64_t g_SilentBestTarget = 0;
 
 // ─── Aimbot Flags ─────────────────────────────
@@ -68,6 +70,7 @@ static uint64_t s_lastFollowCameraObj = 0;
 static bool gESPPrefsLoadedOnce = false;
 
 extern void ResetSilentAim();
+extern void ResetAimMagnet();
 
 void ESPSyncFromPrefs(void) {
     isBox    = ESPPrefsBool(NSSENCRYPT("Box"),    NO);
@@ -101,6 +104,7 @@ void ESPSyncFromPrefs(void) {
     // ShowFov по умолчанию ВЫКЛ, и НИКОГДА не рисуем для Silent
     isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
     aimsilent1 = ESPPrefsBool(NSSENCRYPT("SilentAim"), NO);
+    aimMagnet  = ESPPrefsBool(NSSENCRYPT("AimMagnet"),  NO);
 
     box = (int)ESPPrefsFloat(NSSENCRYPT("box"), 0.0f);
     if (box < 0 || box > 1) box = 0;
@@ -433,6 +437,7 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
             cachedMatch = 0;
             cachedCamera = 0;
             ResetSilentAim();
+            ResetAimMagnet();
             [self clearAllContent];
             return;
         }
@@ -779,9 +784,21 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
 
     g_SilentBestTarget = bestTarget;
     if (aimsilent1)
-        RunSilentAim();   // ← синхронно, 60 fps, без потоков
+        RunSilentAim();
     else
         ResetSilentAim();
+
+    // ── Aim Magnet ──────────────────────────────────────────────────
+    if (aimMagnet && bestTarget && matrix) {
+        float mx = matrix[8], my = matrix[9], mz = matrix[10];
+        float fLen = sqrtf(mx*mx + my*my + mz*mz);
+        if (fLen > 0.001f) {
+            Vector3 camFwd = { -mx/fLen, -my/fLen, -mz/fLen };
+            RunAimMagnet(bestTarget, myLoc, camFwd);
+        }
+    } else {
+        ResetAimMagnet();
+    }
 
     return stats;
 }
