@@ -1,5 +1,5 @@
 // magnet.mm
-// Aim Magnet — упрощённый, дефолтные настройки
+// Aim Magnet через root transform (0x660)
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -15,7 +15,6 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimMagnet;
 
-static constexpr uint64_t kMag_HeadNode = 0x638;
 static constexpr uint64_t kMag_RootNode = 0x660;
 static constexpr uint64_t kMag_BodyPart = 0x10;
 static constexpr uint64_t kMag_Inner    = 0x10;
@@ -64,9 +63,9 @@ static Vector3 RootWorld(uint64_t pawn) {
     return getPositionExt(tf);
 }
 
-static uint64_t MatPtr(uint64_t pawn, uint64_t nodeOff) {
+static uint64_t MatPtr(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return 0;
-    uint64_t node = ReadAddr<uint64_t>(pawn + nodeOff);
+    uint64_t node = ReadAddr<uint64_t>(pawn + kMag_RootNode);
     if (!isVaildPtr(node)) return 0;
     uint64_t tf = ReadAddr<uint64_t>(node + kMag_BodyPart);
     if (!isVaildPtr(tf)) return 0;
@@ -76,9 +75,9 @@ static uint64_t MatPtr(uint64_t pawn, uint64_t nodeOff) {
     return isVaildPtr(mat) ? mat : 0;
 }
 
-static bool WriteLocalAt(uint64_t pawn, uint64_t nodeOff, Vector3 pos) {
+static bool WriteLocalRoot(uint64_t pawn, Vector3 pos) {
     if (!isSane3(pos)) return false;
-    uint64_t mat = MatPtr(pawn, nodeOff);
+    uint64_t mat = MatPtr(pawn);
     if (!isVaildPtr(mat)) return false;
     WriteAddr<Vector3>(mat + kMag_PosOff, pos);
     return true;
@@ -107,7 +106,7 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
         curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
     };
 
-    return WriteLocalAt(pawn, kMag_RootNode, lerped);
+    return WriteLocalRoot(pawn, lerped);
 }
 
 static void MagnetWorker() {
