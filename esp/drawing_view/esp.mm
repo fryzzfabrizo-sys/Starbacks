@@ -783,14 +783,22 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     else
         ResetSilentAim();
 
-    // ── Aim Magnet (velocity-based, безопасно) ─────────────────────
-    if (aimMagnet && matrix) {
+    // ── Aim Magnet — forward берём из кватерниона прицеливания ─────
+    if (aimMagnet) {
         bool firing = get_IsFiring(myPawn);
-        float mx = matrix[8], my = matrix[9], mz = matrix[10];
-        float fLen = sqrtf(mx*mx + my*my + mz*mz);
-        Vector3 camFwd = {0.f, 0.f, 0.f};
-        if (fLen > 0.001f)
-            camFwd = { -mx/fLen, -my/fLen, -mz/fLen };
+
+        Quaternion aimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
+        Vector3 camFwd = {
+            2.0f * (aimQ.x * aimQ.z + aimQ.w * aimQ.y),
+            2.0f * (aimQ.y * aimQ.z - aimQ.w * aimQ.x),
+            1.0f - 2.0f * (aimQ.x * aimQ.x + aimQ.y * aimQ.y)
+        };
+        float flen = sqrtf(camFwd.x*camFwd.x + camFwd.y*camFwd.y + camFwd.z*camFwd.z);
+        if (flen > 0.001f) {
+            camFwd.x /= flen;
+            camFwd.y /= flen;
+            camFwd.z /= flen;
+        }
 
         RunAimMagnet(bestTarget, myLoc, camFwd, firing);
     } else {
