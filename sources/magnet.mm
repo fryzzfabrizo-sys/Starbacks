@@ -1,9 +1,10 @@
 // magnet.mm
-// Aim Magnet через root transform. Быстрый тик + большая сила.
+// Aim Magnet — root transform + настраиваемые оффсеты из меню
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
 #import "../esp/drawing_view/offset.h"
+#import "../esp/drawing_view/ESPPrefs.h"
 #import "mahoa.h"
 #include <cmath>
 #include <atomic>
@@ -24,12 +25,10 @@ static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
 // ─── Tuning ─────────────────────────────────────────────────────────
-static constexpr float kMagStrength   = 0.65f;    // ↑↑ против анимации
-static constexpr float kMagHeadOffset = 1.5f;
-static constexpr float kMagMaxDist    = 80.0f;
-static constexpr float kMagMinDist    = 1.0f;
-static constexpr int   kMagTickMs     = 4;        // 250 Hz — быстрее кадра
-static constexpr int   kMagReleaseMs  = 200;
+static constexpr float kMagMaxDist   = 80.0f;
+static constexpr float kMagMinDist   = 1.0f;
+static constexpr int   kMagTickMs    = 4;
+static constexpr int   kMagReleaseMs = 200;
 
 // ─── State ──────────────────────────────────────────────────────────
 static std::mutex        mag_lock;
@@ -88,8 +87,34 @@ static bool WriteLocalAt(uint64_t pawn, uint64_t nodeOff, Vector3 pos) {
     return true;
 }
 
+// ─── Tuning из меню ─────────────────────────────────────────────────
+struct MagTune {
+    float strength;
+    float yOffset;
+    float xOffset;
+    float zOffset;
+};
+
+static MagTune ReadTune() {
+    MagTune t;
+    t.strength = ESPPrefsFloat(NSSENCRYPT("MagStrength"), 0.35f);
+    t.yOffset  = ESPPrefsFloat(NSSENCRYPT("MagYOffset"),  1.50f);
+    t.xOffset  = ESPPrefsFloat(NSSENCRYPT("MagXOffset"),  0.00f);
+    t.zOffset  = ESPPrefsFloat(NSSENCRYPT("MagZOffset"),  0.00f);
+
+    if (t.strength < 0.02f) t.strength = 0.02f;
+    if (t.strength > 1.00f) t.strength = 1.00f;
+    if (t.yOffset  < -1.5f) t.yOffset  = -1.5f;
+    if (t.yOffset  >  3.0f) t.yOffset  =  3.0f;
+    if (t.xOffset  < -2.0f) t.xOffset  = -2.0f;
+    if (t.xOffset  >  2.0f) t.xOffset  =  2.0f;
+    if (t.zOffset  < -2.0f) t.zOffset  = -2.0f;
+    if (t.zOffset  >  2.0f) t.zOffset  =  2.0f;
+    return t;
+}
+
 // ─── Core ───────────────────────────────────────────────────────────
-static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& camFwd) {
+static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& camFwd, const MagTune& tune) {
     Vector3 headW = HeadWorld(pawn);
     if (!isSane3(headW) || isZero3(headW)) return false;
 
@@ -103,18 +128,18 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
     };
 
     Vector3 rootTgtWorld = {
-        targetPt.x,
-        targetPt.y - kMagHeadOffset,
-        targetPt.z
+        targetPt.x - tune.xOffset,
+        targetPt.y - tune.yOffset,
+        targetPt.z - tune.zOffset
     };
 
     Vector3 curRootW = RootWorld(pawn);
     if (!isSane3(curRootW) || isZero3(curRootW)) return false;
 
     Vector3 lerped = {
-        curRootW.x + (rootTgtWorld.x - curRootW.x) * kMagStrength,
-        curRootW.y + (rootTgtWorld.y - curRootW.y) * kMagStrength,
-        curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
+        curRootW.x + (rootTgtWorld.x - curRootW.x) * tune.strength,
+        curRootW.y + (rootTgtWorld.y - curRootW.y) * tune.strength,
+        curRootW.z + (rootTgtWorld.z - curRootW.z) * tune.strength
     };
 
     return WriteLocalAt(pawn, kMag_RootNode, lerped);
@@ -159,7 +184,8 @@ static void MagnetWorker() {
             continue;
         }
 
-        ApplyMagnet(mag_locked, camPos, camFwd);
+        MagTune tune = ReadTune();
+        ApplyMagnet(mag_locked, camPos, camFwd, tune);
     }
 }
 
