@@ -1,5 +1,5 @@
 // silent.mm
-// Дамп структуры HitCollider с float-интерпретацией
+// Дамп вглубь структуры HitCollider
 // Лог: /var/mobile/Documents/collider_dump.log
 
 #import "../esp/Core/GameLogic.h"
@@ -51,11 +51,12 @@ static inline bool validVec(const Vector3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
            !(v.x == 0.f && v.y == 0.f && v.z == 0.f);
 }
+
 static Vector3 HeadPos(uint64_t pawn) {
     if (!validPtr(pawn)) return {};
     uint64_t bodyPart = ReadAddr<uint64_t>(pawn + kPlayer_HeadNode);
     if (!validPtr(bodyPart)) return {};
-    uint64_t node = ReadAddr<uint64_t>(bodyPart + kBodyPart_TransNode);
+    uint64_t node = ReadAddr<uint64_t>(pawn + kBodyPart_TransNode);
     if (!validPtr(node)) return {};
     return getPositionExt(node);
 }
@@ -83,12 +84,39 @@ static void DumpStruct(const char* tag, uint64_t addr) {
     LogToFile("");
 }
 
-// Раз в 800 мс — один дамп
+static void DumpCollider(uint64_t col, int32_t lay) {
+    if (!validPtr(col)) return;
+
+    char tag[64];
+    snprintf(tag, sizeof(tag), "COLLIDER layer=%d", lay);
+    DumpStruct(tag, col);
+
+    // Раскрутка вложенной структуры
+    uint64_t p10 = ReadAddr<uint64_t>(col + 0x10);
+    if (!validPtr(p10)) {
+        LogToFile("[!] +0x10 pointer invalid");
+        return;
+    }
+
+    DumpStruct("  +0x10 deref", p10);
+
+    // Из вложенной структуры вытаскиваем все указатели и дампим их
+    // Особое внимание: +0x30, +0x38, +0x48 — там могут быть настоящие компоненты
+    const uint64_t offs[] = { 0x10, 0x18, 0x28, 0x30, 0x38, 0x48 };
+    for (uint64_t o : offs) {
+        uint64_t p = ReadAddr<uint64_t>(p10 + o);
+        if (!validPtr(p)) continue;
+        char stag[64];
+        snprintf(stag, sizeof(stag), "    deref(+%02llx)", (unsigned long long)o);
+        DumpStruct(stag, p);
+    }
+}
+
 static std::chrono::steady_clock::time_point g_lastDumpTime =
     std::chrono::steady_clock::now();
+static uint64_t g_lastLoggedCol = 0;
 
 static void SilentWorker() {
-    // Метка что поток запустился
     LogToFile("[INIT] SilentWorker thread started");
 
     while (true) {
@@ -105,38 +133,31 @@ static void SilentWorker() {
         }
         if (!validPtr(h) || !validVec(tPos)) continue;
 
-        // RayDir как обычно
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
 
-        // Дамп раз в 800 мс, не зависит от смены коллайдера
-        auto now = std::chrono::steady_clock::now();
-        auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       now - g_lastDumpTime).count();
-        if (ms < 800) continue;
-        g_lastDumpTime = now;
-
+        // Дамп только когда есть игрок (layer=13) и недавно не логировали эту же цель
         uint64_t col = ReadAddr<uint64_t>(h + kHit_HitCollider);
         int32_t  lay = ReadAddr<int32_t>(h + kHit_ActorLayer);
 
-        char tag[64];
-        snprintf(tag, sizeof(tag), "COLLIDER layer=%d  hitInfo=0x%llx",
-                 lay, (unsigned long long)h);
+        if (lay != 13) continue;   // только player!
+        if (!validPtr(col)) continue;
 
-        if (validPtr(col)) {
-            DumpStruct(tag, col);
+        auto now = std::chrono::steady_clock::now();
+        auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now - g_lastDumpTime).count();
+        if (ms < 1200) continue;
+        if (col == g_lastLoggedCol) continue;
+        g_lastDumpTime = now;
+        g_lastLoggedCol = col;
 
-            uint64_t p10 = ReadAddr<uint64_t>(col + 0x10);
-            uint64_t p20 = ReadAddr<uint64_t>(col + 0x20);
-            if (validPtr(p10)) DumpStruct("  +0x10 deref", p10);
-            if (validPtr(p20)) DumpStruct("  +0x20 deref", p20);
-        } else {
-            LogToFile("[DUMP] HitCollider invalid (0x%llx)  layer=%d",
-                      (unsigned long long)col, lay);
-        }
+        LogToFile("");
+        LogToFile("========= PLAYER HITBOX DUMP (hitInfo=0x%llx) =========",
+                  (unsigned long long)h);
+        DumpCollider(col, lay);
     }
 }
 
@@ -155,20 +176,6 @@ void ResetSilentAim() {
 
 void RunSilentAim() {
     InitSilentAimThread();
-
-    // Логируем каждый вызов раз в 2 сек чтобы видеть что функция вызывается
-    static std::chrono::steady_clock::time_point lastRunLog =
-        std::chrono::steady_clock::now();
-    auto nowRun = std::chrono::steady_clock::now();
-    auto msRun  = std::chrono::duration_cast<std::chrono::milliseconds>(
-                      nowRun - lastRunLog).count();
-    if (msRun > 2000) {
-        lastRunLog = nowRun;
-        LogToFile("[RUN] RunSilentAim called. aimsilent=%d lobby=%d match=0x%llx",
-                  aimsilent1 ? 1 : 0,
-                  IsAtLobby(Moudule_Base) ? 1 : 0,
-                  (unsigned long long)cachedMatch);
-    }
 
     if (!aimsilent1 || IsAtLobby(Moudule_Base) || !validPtr(cachedMatch)) {
         g_lastMatch = 0;
