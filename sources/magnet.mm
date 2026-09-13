@@ -1,5 +1,5 @@
 // magnet.mm
-// Aim Magnet — максимум силы и дистанции.
+// Aim Magnet — displacement = radius − 1м запас.
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -22,11 +22,12 @@ static constexpr uint64_t kMag_Inner    = 0x10;
 static constexpr uint64_t kMag_Matrix   = 0x38;
 static constexpr uint64_t kMag_PosOff   = 0x90;
 
-// ─── Максимальные рабочие параметры ─────────────────────
-static constexpr float kMagStrength   = 1.00f;    // мгновенное притяжение
-static constexpr float kMagMaxDist    = 200.0f;
-static constexpr float kMagMinDist    = 1.0f;
-static constexpr float kMagMaxDisplacement = 10.00f; // внутри бустнутого коллайдера radius=12
+// ─── Параметры ──────────────────────────────────────────
+// radius буста = 18.00 → displacement = 18 - 1 = 17.00 (запас 1м)
+static constexpr float kMagStrength        = 1.00f;
+static constexpr float kMagMaxDist         = 300.0f;
+static constexpr float kMagMinDist         = 1.0f;
+static constexpr float kMagMaxDisplacement = 17.00f;
 
 static constexpr int   kMagTickMs     = 4;
 static constexpr int   kMagReleaseMs  = 200;
@@ -120,6 +121,7 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
         curRootW.z + (rootTgtWorld.z - curRootW.z) * kMagStrength
     };
 
+    // Clamp: не дальше 17м от исходной позиции (radius 18 − 1м запас)
     Vector3 deltaOrig = { lerped.x - mag_originalRoot.x, 0.0f, lerped.z - mag_originalRoot.z };
     float dOrig = vlen2xz(deltaOrig);
     if (dOrig > kMagMaxDisplacement && dOrig > 0.0001f) {
