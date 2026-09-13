@@ -776,12 +776,14 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     }
 
     g_SilentBestTarget = bestTarget;
+
+    // ── Silent Aim ──────────────────────────────────────────────────
     if (aimsilent1)
         RunSilentAim();
     else
         ResetSilentAim();
 
-    // ── Aim Magnet ──────────────────────────────────────────────────
+    // ── Aim Magnet (velocity-based, безопасно) ─────────────────────
     if (aimMagnet && matrix) {
         bool firing = get_IsFiring(myPawn);
         float mx = matrix[8], my = matrix[9], mz = matrix[10];
