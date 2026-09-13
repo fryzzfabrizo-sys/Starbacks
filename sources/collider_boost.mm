@@ -2,7 +2,7 @@
 // Автоматический буст CapsuleCollider врага.
 // Включается автоматически, когда включён Aim Magnet.
 // Offset'ы зафиксированы по дампу v3.
-// Размеры: 10× radius / 8× height от дефолтных.
+// Размеры: очень большие (radius 8.0 / height 20.0).
 
 #import "collider_boost.h"
 #import "../esp/Core/GameLogic.h"
@@ -30,12 +30,12 @@ static constexpr uint64_t kNative_RadiusOff              = 0x80;
 static constexpr uint64_t kNative_HeightOff              = 0x84;
 
 // ─── Целевые размеры ────────────────────────────────────
-static constexpr float kBoostRadius = 4.80f;   // 0.48 × 10
-static constexpr float kBoostHeight = 12.80f;  // 1.60 × 8
+static constexpr float kBoostRadius = 8.00f;   // 0.48 × ~16.7
+static constexpr float kBoostHeight = 20.00f;  // 1.60 × 12.5
 
-// Границы "здоровых" значений (расширены)
-static constexpr float kRadMin = 0.10f, kRadMax = 8.00f;
-static constexpr float kHeiMin = 0.80f, kHeiMax = 20.00f;
+// Границы "здоровых" значений (сильно расширены)
+static constexpr float kRadMin = 0.10f, kRadMax = 15.00f;
+static constexpr float kHeiMin = 0.80f, kHeiMax = 40.00f;
 
 static constexpr int kStartupDelayMs = 3000;
 static constexpr int kTickMs         = 40;
@@ -62,7 +62,7 @@ static void LogInit(void) {
             time_t t = time(NULL);
             struct tm *tmv = localtime(&t);
             fprintf(g_logFp,
-                    "\n\n========== COLLIDER BOOST v7 (10x) %04d-%02d-%02d %02d:%02d:%02d ==========\n",
+                    "\n\n========== COLLIDER BOOST v8 (huge) %04d-%02d-%02d %02d:%02d:%02d ==========\n",
                     tmv->tm_year + 1900, tmv->tm_mon + 1, tmv->tm_mday,
                     tmv->tm_hour, tmv->tm_min, tmv->tm_sec);
             fflush(g_logFp);
