@@ -39,7 +39,7 @@ bool isNoReload    = NO;
 bool isVohaDan     = NO;
 bool isFastFire    = NO;
 
-bool isShowFov = NO;   // ← по умолчанию ВЫКЛ
+bool isShowFov = NO;
 
 // ─── Silent Aim ──────────────────────────────
 bool aimsilent1 = NO;
@@ -101,7 +101,6 @@ void ESPSyncFromPrefs(void) {
     isVohaDan  = ESPPrefsBool(NSSENCRYPT("VohaDan"), NO);
     isFastFire = ESPPrefsBool(NSSENCRYPT("FastFire"), NO);
 
-    // ShowFov по умолчанию ВЫКЛ, и НИКОГДА не рисуем для Silent
     isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
     aimsilent1 = ESPPrefsBool(NSSENCRYPT("SilentAim"), NO);
     aimMagnet  = ESPPrefsBool(NSSENCRYPT("AimMagnet"),  NO);
@@ -135,12 +134,9 @@ void ESPSyncFromPrefs(void) {
     aimSpeed = ESPPrefsFloat(NSSENCRYPT("AimSpeed"), 100.0f) / 100.0f;
     aimSpeed = fmaxf(0.01f, fminf(aimSpeed, 1.0f));
 
-    // ─── Silent Aim: FOV не показываем НИКОГДА ──────────────
-    // Если Silent включён без Aimbot — принудительно выключаем FOV-круг
     if (aimsilent1 && !isAimbot) {
         isShowFov = NO;
     }
-    // Страховка: FOV-круг существует только для Aimbot
     if (!isAimbot) {
         isShowFov = NO;
     }
@@ -268,7 +264,7 @@ static inline BOOL RenderFOVCirclePath(CGMutablePathRef path, CGFloat vw, CGFloa
 static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *color, CGFloat fontSize, BOOL leftAligned) {
     if (!ctx || !str) return;
     ESP_View *view = (__bridge ESP_View *)ctx;
-    
+
     CGRect f = CGRectMake(frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
     CGFloat finalSize = fontSize;
     if ([str hasPrefix:@"["] || [str hasSuffix:@"]"]) {
@@ -295,8 +291,8 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
     if (@available(iOS 15.0, *))
         self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(50.0, 60.0, 60.0);
     else if (@available(iOS 10.0, *))
-        self.displayLink.preferredFramesPerSecond = 60; 
-    
+        self.displayLink.preferredFramesPerSecond = 60;
+
     [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     return self;
 }
@@ -346,7 +342,7 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
     self.snaplineLayer   = [self makeShapeLayer:white fill:nil lineWidth:0.7f zPos:1];
     self.boneLayer       = [self makeShapeLayer:boneWhite fill:nil lineWidth:0.7f zPos:2];
     self.boxLayer        = [self makeShapeLayer:white fill:nil lineWidth:0.7f zPos:3];
-    
+
     self.hpBackgroundLayer = [self makeShapeLayer:[UIColor blackColor] fill:nil lineWidth:0.8f zPos:4];
     self.hpFillLayer       = [self makeShapeLayer:nil fill:hpGreen lineWidth:0 zPos:5];
 
@@ -473,7 +469,6 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
 
         if (stats.inMatch) {
             CGMutablePathRef fovPath = CGPathCreateMutable();
-            // FOV-круг ТОЛЬКО для aimbot. Silent всегда без FOV.
             BOOL hasFov = (isAimbot && isShowFov && !aimsilent1)
                           ? RenderFOVCirclePath(fovPath, vw, vh, YES, aimFov)
                           : NO;
@@ -569,16 +564,16 @@ void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
 
     float t;
     bool isFiring = get_IsFiring(player);
-    
+
     if (isAimRage || isFiring) {
         t = 1.0f;
     } else {
-        float speed = Clamp01f(aimSpeed) * 2.0f; 
+        float speed = Clamp01f(aimSpeed) * 2.0f;
         speed = fminf(speed, 1.0f);
         t = speed * speed;
         float centerBoost = 1.0f - Clamp01f(angle / 30.0f);
-        t += centerBoost * 0.20f; 
-        t = fmaxf(0.05f, fminf(t, 1.0f)); 
+        t += centerBoost * 0.20f;
+        t = fmaxf(0.05f, fminf(t, 1.0f));
     }
 
     Quaternion out;
@@ -587,7 +582,7 @@ void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
     } else {
         out = Quaternion::Normalized(Quaternion::Slerp(current, q, t));
     }
-    
+
     WriteAddr<Quaternion>(player + kAimRotation,    out);
     WriteAddr<Quaternion>(player + kAimRotationAux, out);
 }
@@ -618,7 +613,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
 
     stats.inMatch = true;
 
-    if (camcao) { 
+    if (camcao) {
         uint64_t FollowCameraObj = ReadAddr<uint64_t>(myPawn + kFollowCamera);
         if (isVaildPtr(FollowCameraObj)) {
             float currentCamVal = ReadAddr<float>(FollowCameraObj + kFOVOffset);
@@ -686,7 +681,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
         bool    aimVis   = getIsVisible(pawn);
         bool    espVis   = aimVis || isKnocked;
 
-        if ((isAimbot || aimsilent1) && dis <= aimDistance) {
+        if ((isAimbot || aimsilent1 || aimMagnet) && dis <= aimDistance) {
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
@@ -696,8 +691,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix, (float)screenVpW, (float)screenVpH, (float)vw, (float)vh);
                 bool onScreen = (w2s.z > 0.001f);
 
-                if (aimsilent1 && !isAimbot) {
-                    // === SILENT: 360°, без FOV ===
+                if ((aimsilent1 || aimMagnet) && !isAimbot) {
                     float score;
                     if (onScreen) {
                         float dx = w2s.x - center.x;
@@ -728,7 +722,6 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                         bestHeadPos  = aimPos;
                     }
                 } else {
-                    // === AIMBOT: с FOV ===
                     if (onScreen) {
                         float dx = w2s.x - center.x;
                         float dy = w2s.y - center.y;
@@ -789,13 +782,15 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
         ResetSilentAim();
 
     // ── Aim Magnet ──────────────────────────────────────────────────
-    if (aimMagnet && bestTarget && matrix) {
+    if (aimMagnet && matrix) {
+        bool firing = get_IsFiring(myPawn);
         float mx = matrix[8], my = matrix[9], mz = matrix[10];
         float fLen = sqrtf(mx*mx + my*my + mz*mz);
-        if (fLen > 0.001f) {
-            Vector3 camFwd = { -mx/fLen, -my/fLen, -mz/fLen };
-            RunAimMagnet(bestTarget, myLoc, camFwd);
-        }
+        Vector3 camFwd = {0.f, 0.f, 0.f};
+        if (fLen > 0.001f)
+            camFwd = { -mx/fLen, -my/fLen, -mz/fLen };
+
+        RunAimMagnet(bestTarget, myLoc, camFwd, firing);
     } else {
         ResetAimMagnet();
     }
