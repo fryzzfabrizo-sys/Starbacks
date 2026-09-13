@@ -1,6 +1,7 @@
 // remote_probe.mm
 // TEST 1: наша функция add(5,7) — проверка инфры
 // TEST 2: GetHp(localPlayer) — проверка IL2CPP
+// Лог: /var/mobile/Documents/remote_probe.log
 
 #import <Foundation/Foundation.h>
 #include <mach/mach.h>
@@ -72,8 +73,8 @@ static uint64_t FindUnityBase() {
     return 0;
 }
 
-// Вызов: PC=func, LR=landing(wfe-loop), args X0/X1, SP=stack
-// Возврат: X0 на момент остановки потока на landing
+// Remote call 2 аргумента → X0 на возврате
+// Landing pad = wfe; b .-4 (бесконечный wait-loop без сигнала)
 static uint64_t RemoteCall2(mach_port_t task, uint64_t func, uint64_t a0, uint64_t a1) {
     uint64_t stack = VMAlloc(task, 65536);
     if (!stack) { LogToFile("[RC] stack alloc FAILED"); return 0; }
@@ -81,7 +82,7 @@ static uint64_t RemoteCall2(mach_port_t task, uint64_t func, uint64_t a0, uint64
 
     uint64_t landing = VMAlloc(task, 0x1000);
     if (!landing) { LogToFile("[RC] landing alloc FAILED"); return 0; }
-    // wfe; b .-4  = бесконечный wait-loop
+    // wfe ; b .-4
     uint32_t loopInsn[2] = { 0xD503205F, 0x17FFFFFF };
     VMWrite(task, landing, loopInsn, 8);
 
@@ -110,7 +111,6 @@ static uint64_t RemoteCall2(mach_port_t task, uint64_t func, uint64_t a0, uint64
         arm_thread_state64_t cur;
         mach_msg_type_number_t c = ARM_THREAD_STATE64_COUNT;
         if (thread_get_state(th, ARM_THREAD_STATE64, (thread_state_t)&cur, &c) != KERN_SUCCESS) break;
-        // Маскируем PAC-биты (старшие 16 бит)
         uint64_t pcMask = cur.__pc & 0x0000FFFFFFFFFFFFULL;
         uint64_t lMask  = landing & 0x0000FFFFFFFFFFFFULL;
         if (pcMask == lMask) {
@@ -122,7 +122,7 @@ static uint64_t RemoteCall2(mach_port_t task, uint64_t func, uint64_t a0, uint64
         }
     }
 
-    // НЕ убиваем поток. Оставляем его в wfe-loop. Процесс сам уберёт.
+    // НЕ убиваем поток — оставляем в wfe-loop
     return result;
 }
 
@@ -143,12 +143,10 @@ extern "C" void ProbeRemote() {
     if (!FindUnityBase()) { LogToFile("unity base not found"); return; }
     LogToFile("unity base = 0x%llx", (unsigned long long)gUnityBase);
 
-    // ─── TEST 1: наша собственная функция add(x0,x1) ───────────
+    // ─── TEST 1: своя функция add(x0, x1) ─────────────────────
     LogToFile("[TEST1] call our own add function");
     uint64_t codePage = VMAlloc(gTask, 0x1000);
-    // add x0, x0, x1  = 0x8B010000
-    // ret             = 0xD65F03C0
-    uint32_t addFunc[2] = { 0x8B010000, 0xD65F03C0 };
+    uint32_t addFunc[2] = { 0x8B010000, 0xD65F03C0 };  // add x0, x0, x1 ; ret
     VMWrite(gTask, codePage, addFunc, 8);
     LogToFile("[TEST1] add func addr = 0x%llx", (unsigned long long)codePage);
 
@@ -157,34 +155,44 @@ extern "C" void ProbeRemote() {
 
     // ─── TEST 2: GetHp(localPlayer) ────────────────────────────
     LogToFile("[TEST2] call GetHp(localPlayer)");
+
     uint64_t matchGame = getMatchGame(Moudule_Base);
     LogToFile("matchGame = 0x%llx", (unsigned long long)matchGame);
-    if (!matchGame) { LogToFile("no match — запускай в бою"); goto done; }
 
-    uint64_t match = getMatch(matchGame);
-    if (!match) { LogToFile("no match ptr"); goto done; }
-    LogToFile("match = 0x%llx", (unsigned long long)match);
+    if (matchGame) {
+        uint64_t match = getMatch(matchGame);
+        LogToFile("match = 0x%llx", (unsigned long long)match);
 
-    uint64_t local = getLocalPlayer(match);
-    if (!local) { LogToFile("no local player"); goto done; }
-    LogToFile("localPlayer = 0x%llx", (unsigned long long)local);
+        if (match) {
+            uint64_t local = getLocalPlayer(match);
+            LogToFile("localPlayer = 0x%llx", (unsigned long long)local);
 
-    int hpDirect    = get_CurHP(local);
-    int hpMaxDirect = get_MaxHP(local);
-    LogToFile("direct: HP = %d / %d", hpDirect, hpMaxDirect);
+            if (local) {
+                int hpDirect    = get_CurHP(local);
+                int hpMaxDirect = get_MaxHP(local);
+                LogToFile("direct: HP = %d / %d", hpDirect, hpMaxDirect);
 
-    uint64_t getHpAddr = gUnityBase + 0x543592C;
-    LogToFile("GetHp addr = 0x%llx", (unsigned long long)getHpAddr);
+                uint64_t getHpAddr = gUnityBase + 0x543592C;
+                LogToFile("GetHp addr = 0x%llx", (unsigned long long)getHpAddr);
 
-    uint64_t r2 = RemoteCall2(gTask, getHpAddr, local, 0);
-    LogToFile("[TEST2] remote GetHp = %lld", (long long)r2);
+                uint64_t r2 = RemoteCall2(gTask, getHpAddr, local, 0);
+                LogToFile("[TEST2] remote GetHp = %lld", (long long)r2);
 
-    if ((int)r2 == hpDirect)
-        LogToFile("[TEST2] *** MATCH — WORKS ***");
-    else
-        LogToFile("[TEST2] mismatch direct=%d remote=%lld", hpDirect, (long long)r2);
+                if ((int)r2 == hpDirect)
+                    LogToFile("[TEST2] *** MATCH — WORKS ***");
+                else
+                    LogToFile("[TEST2] mismatch direct=%d remote=%lld",
+                              hpDirect, (long long)r2);
+            } else {
+                LogToFile("no local player");
+            }
+        } else {
+            LogToFile("no match ptr");
+        }
+    } else {
+        LogToFile("no match — запускай в бою");
+    }
 
-done:
     LogToFile("========== DONE ==========");
     LogToFile("");
 }
