@@ -712,6 +712,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
         bool    isKnocked = get_IsKnockedDown(pawn);
         bool    aimVis   = getIsVisible(pawn);
         bool    espVis   = aimVis || isKnocked;
+        if (!espVis) continue;
 
         if ((isAimbot || aimsilent1 || aimMagnet) && dis <= aimDistance) {
             BOOL valid = YES;
