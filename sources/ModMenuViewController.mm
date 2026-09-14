@@ -701,7 +701,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         [self sectionLabel:@"Precision envelope" y:y width:contentWidth];
         y += 23.0f;
         y = [self addSliderRow:@"FOV radius" format:@"AIM FOV  /  %.0f PX" key:@"Fov" def:150.0f min:10 max:500 labelTag:6001 sliderTag:6002 y:y width:rowWidth];
-        y = [self addSliderRow:@"Max distance" format:@"AIM DISTANCE  /  %.0f M" key:@"Distance" def:200.0f min:1 max:400 labelTag:6003 sliderTag:6004 y:y width:rowWidth];
+        y = [self addSliderRow:@"Max distance" format:@"AIM DISTANCE  /  %.0f M" key:@"Distance" def:200.0f min:1 max:500 labelTag:6003 sliderTag:6004 y:y width:rowWidth];
         y = [self addSliderRow:@"Lock speed" format:@"AIM SPEED  /  %.0f%%" key:@"AimSpeed" def:100.0f min:1 max:100 labelTag:6005 sliderTag:6006 y:y width:rowWidth];
         y += 4.0f;
         [_contentContainer addSubview:[self buildCheckboxCellWithTitle:@"Floating Aim Button" key:(NSString *)NSSENCRYPT("FloatAimBtn") frame:CGRectMake(padX, y, rowWidth, kRowHeight)]];

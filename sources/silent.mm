@@ -17,6 +17,7 @@ extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
+extern int      aimPosition;
 
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
@@ -35,7 +36,7 @@ static uint64_t          g_lastMatch = 0;
 static constexpr uint32_t kNoRecoilOriginal = 1016018816U;
 static constexpr uint32_t kNoRecoilModified = 180U;
 static constexpr mach_vm_address_t kNoRecoilScanStart = 0x100000000ULL;
-static constexpr mach_vm_address_t kNoRecoilScanEnd = 0x160000000ULL;
+static constexpr mach_vm_address_t kNoRecoilScanEnd = 0x4000000000ULL;
 static std::mutex g_noRecoilLock;
 static std::vector<mach_vm_address_t> g_noRecoilResults;
 static std::atomic<bool> g_noRecoilEnabled{false};
@@ -122,13 +123,21 @@ static inline bool validVec(const Vector3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) &&
            !(v.x == 0.f && v.y == 0.f && v.z == 0.f);
 }
-static Vector3 HeadPos(uint64_t pawn) {
+static Vector3 BonePos(uint64_t pawn, uint64_t boneOffset) {
     if (!validPtr(pawn)) return {};
-    uint64_t bodyPart = ReadAddr<uint64_t>(pawn + kPlayer_HeadNode);
+    uint64_t bodyPart = ReadAddr<uint64_t>(pawn + boneOffset);
     if (!validPtr(bodyPart)) return {};
     uint64_t node = ReadAddr<uint64_t>(bodyPart + kBodyPart_TransNode);
     if (!validPtr(node)) return {};
     return getPositionExt(node);
+}
+
+static Vector3 HeadPos(uint64_t pawn) {
+    return BonePos(pawn, kPlayer_HeadNode);
+}
+
+static Vector3 HipPos(uint64_t pawn) {
+    return BonePos(pawn, 0x640);
 }
 
 static void SilentWorker() {
@@ -161,6 +170,7 @@ static void SilentWorker() {
         Vector3 direction = { diff.x * invLen, diff.y * invLen, diff.z * invLen };
         WriteAddr<Vector3>(h + kHit_RayDir, direction);
         WriteAddr<float>(h + kHit_Scatter, 0.0f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
@@ -206,7 +216,10 @@ void RunSilentAim() {
         return;
     }
 
-    Vector3 tPos = HeadPos(target);
+    Vector3 head = HeadPos(target);
+    Vector3 hip = HipPos(target);
+    Vector3 tPos = GetAimTargetPos(head, hip, aimPosition);
+    if (aimPosition == 0) tPos.y += 0.12f;
     if (!validVec(tPos)) {
         g_hasData.store(false, std::memory_order_release);
         return;

@@ -704,7 +704,7 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
         if (IsZeroVec(footPos)) continue;
 
         float dis = Vector3::Distance(myLoc, footPos);
-        if (dis > 400.0f) continue;
+        if (dis > 500.0f) continue;
 
         Vector3 headPos  = getPositionExt(getHead(pawn));
         Vector3 aimPos   = headPos;
