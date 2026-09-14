@@ -27,7 +27,7 @@ static constexpr uint64_t kMag_PosOff   = 0x90;
 static constexpr float kMagStrength        = 1.00f;
 static constexpr float kMagMaxDist         = 300.0f;
 static constexpr float kMagMinDist         = 1.0f;
-static constexpr float kMagMaxDisplacement = 18.00f;
+static constexpr float kMagMaxDisplacement = 15.00f;
 
 static constexpr int   kMagTickMs     = 4;
 static constexpr int   kMagReleaseMs  = 200;
