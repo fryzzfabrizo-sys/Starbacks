@@ -82,7 +82,8 @@ void NoRecoilSetEnabled(bool enabled) {
             if (g_noRecoilEnabled.load(std::memory_order_acquire)) {
                 g_noRecoilResults = results;
                 for (mach_vm_address_t address : g_noRecoilResults)
-                    _write((long)address, &kNoRecoilModifiedValue, sizeof(kNoRecoilModifiedValue));
+                    uint32_t modified = kNoRecoilModifiedValue;
+                    _write((long)address, &modified, sizeof(modified));
             }
         }
         g_noRecoilScanning.store(false, std::memory_order_release);
