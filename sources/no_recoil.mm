@@ -81,9 +81,10 @@ void NoRecoilSetEnabled(bool enabled) {
             std::lock_guard<std::mutex> lock(g_noRecoilLock);
             if (g_noRecoilEnabled.load(std::memory_order_acquire)) {
                 g_noRecoilResults = results;
-                for (mach_vm_address_t address : g_noRecoilResults)
-                    uint32_t modified = kNoRecoilModifiedValue;
+                uint32_t modified = kNoRecoilModifiedValue;
+                for (mach_vm_address_t address : g_noRecoilResults) {
                     _write((long)address, &modified, sizeof(modified));
+                }
             }
         }
         g_noRecoilScanning.store(false, std::memory_order_release);
