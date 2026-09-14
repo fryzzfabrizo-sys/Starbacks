@@ -42,11 +42,18 @@ static inline bool valid(uint64_t value) {
 
 static inline uint64_t readUmaData(uint64_t avatarManager) {
     if (!valid(avatarManager)) return 0;
-    uint64_t direct = ReadAddr<uint64_t>(avatarManager + kUmaDataOffset);
-    if (valid(direct)) return direct;
+    const uint64_t umaOffsets[] = { 0x30, 0x38 };
+    for (uint64_t offset : umaOffsets) {
+        uint64_t direct = ReadAddr<uint64_t>(avatarManager + offset);
+        if (valid(direct) && valid(ReadAddr<uint64_t>(direct + kSkeleton))) return direct;
+    }
     uint64_t avatar = ReadAddr<uint64_t>(avatarManager + kAvatar);
     if (!valid(avatar)) return 0;
-    return ReadAddr<uint64_t>(avatar + kUmaDataOffset);
+    for (uint64_t offset : umaOffsets) {
+        uint64_t data = ReadAddr<uint64_t>(avatar + offset);
+        if (valid(data) && valid(ReadAddr<uint64_t>(data + kSkeleton))) return data;
+    }
+    return 0;
 }
 
 static inline uint64_t findBoneTransform(uint64_t player, int32_t hash) {
