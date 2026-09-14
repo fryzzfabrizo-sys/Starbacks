@@ -804,11 +804,11 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
         ResetSilentAim();
 
     // ── Aim Magnet (ТОЛЬКО в прицеле) ───────────────────────────────
-    // Работает вместе с aimbot и silent — берёт тот же bestTarget.
+    // Держит цель пока она жива; переприцеливание (выход из ADS) сбрасывает.
     if (aimMagnet) {
         bool scoping = get_IsScoping(myPawn);
 
-        if (scoping && isVaildPtr(bestTarget)) {
+        if (scoping) {
             Quaternion aimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
             Vector3 camFwd = {
                 2.0f * (aimQ.x * aimQ.z + aimQ.w * aimQ.y),
@@ -821,6 +821,8 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
                 camFwd.y /= flen;
                 camFwd.z /= flen;
             }
+            // bestTarget может быть 0 — магнит сам удержит прежнюю цель,
+            // если она жива. Иначе возьмёт новую из bestTarget.
             RunAimMagnet(bestTarget, myLoc, camFwd, true);
         } else {
             ResetAimMagnet();
