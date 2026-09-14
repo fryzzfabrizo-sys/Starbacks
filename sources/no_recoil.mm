@@ -60,8 +60,9 @@ void NoRecoilSetEnabled(bool enabled) {
     if (!enabled) {
         g_noRecoilEnabled.store(false, std::memory_order_release);
         std::lock_guard<std::mutex> lock(g_noRecoilLock);
+        uint32_t originalValue = kNoRecoilOriginalValue;
         for (mach_vm_address_t address : g_noRecoilResults)
-            _write((long)address, &kNoRecoilOriginalValue, sizeof(kNoRecoilOriginalValue));
+            _write((long)address, &originalValue, sizeof(originalValue));
         g_noRecoilResults.clear();
         return;
     }
