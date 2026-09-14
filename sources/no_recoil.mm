@@ -1,5 +1,6 @@
 #import "no_recoil.h"
 #import "../esp/Core/pid.h"
+#import "../esp/drawing_view/offset.h"
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -16,10 +17,10 @@ static std::atomic<bool> g_noRecoilScanning{false};
 
 static std::vector<mach_vm_address_t> ScanNoRecoilValues() {
     std::vector<mach_vm_address_t> results;
-    mach_vm_address_t address = kNoRecoilScanStartAddressAddress;
+    mach_vm_address_t address = kNoRecoilScanStartAddress;
     task_t task = mach_task_self();
 
-    while (address < kNoRecoilScanEndAddressAddress) {
+    while (address < kNoRecoilScanEndAddress) {
         mach_vm_address_t regionAddress = address;
         mach_vm_size_t regionSize = 0;
         uint32_t depth = 0;
@@ -34,8 +35,8 @@ static std::vector<mach_vm_address_t> ScanNoRecoilValues() {
         address = next;
         if (info.is_submap || !(info.protection & VM_PROT_READ) || !(info.protection & VM_PROT_WRITE)) continue;
 
-        mach_vm_address_t scanStart = std::max(regionAddress, kNoRecoilScanStartAddressAddress);
-        mach_vm_address_t scanEnd = std::min(next, kNoRecoilScanEndAddressAddress);
+        mach_vm_address_t scanStart = std::max(regionAddress, kNoRecoilScanStartAddress);
+        mach_vm_address_t scanEnd = std::min(next, kNoRecoilScanEndAddress);
         for (mach_vm_address_t chunkStart = scanStart; chunkStart < scanEnd;) {
             mach_vm_size_t chunkSize = (mach_vm_size_t)std::min<mach_vm_address_t>(0x100000ULL, scanEnd - chunkStart);
             std::vector<uint8_t> bytes((size_t)chunkSize);
