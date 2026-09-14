@@ -17,12 +17,10 @@ extern uint64_t Moudule_Base;
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
-extern int      aimPosition;
 
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
-static constexpr uint64_t kHit_Scatter        = 0x5C;
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;
 static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
@@ -136,10 +134,6 @@ static Vector3 HeadPos(uint64_t pawn) {
     return BonePos(pawn, kPlayer_HeadNode);
 }
 
-static Vector3 HipPos(uint64_t pawn) {
-    return BonePos(pawn, 0x640);
-}
-
 static void SilentWorker() {
     while (true) {
         if (!g_hasData.load(std::memory_order_acquire)) {
@@ -161,16 +155,7 @@ static void SilentWorker() {
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
-        float lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-        if (lenSq <= 0.0001f) {
-            std::this_thread::yield();
-            continue;
-        }
-        float invLen = 1.0f / std::sqrt(lenSq);
-        Vector3 direction = { diff.x * invLen, diff.y * invLen, diff.z * invLen };
-        WriteAddr<Vector3>(h + kHit_RayDir, direction);
-        WriteAddr<float>(h + kHit_Scatter, 0.0f);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        WriteAddr<Vector3>(h + kHit_RayDir, diff);
     }
 }
 
@@ -216,10 +201,7 @@ void RunSilentAim() {
         return;
     }
 
-    Vector3 head = HeadPos(target);
-    Vector3 hip = HipPos(target);
-    Vector3 tPos = GetAimTargetPos(head, hip, aimPosition);
-    if (aimPosition == 0) tPos.y += 0.12f;
+    Vector3 tPos = HeadPos(target);
     if (!validVec(tPos)) {
         g_hasData.store(false, std::memory_order_release);
         return;
@@ -236,13 +218,5 @@ void RunSilentAim() {
     Vector3 diff   = { tPos.x - origin.x,
                        tPos.y - origin.y,
                        tPos.z - origin.z };
-    float lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-    if (lenSq <= 0.0001f) {
-        g_hasData.store(false, std::memory_order_release);
-        return;
-    }
-    float invLen = 1.0f / std::sqrt(lenSq);
-    Vector3 direction = { diff.x * invLen, diff.y * invLen, diff.z * invLen };
-    WriteAddr<Vector3>(aimPtr + kHit_RayDir, direction);
-    WriteAddr<float>(aimPtr + kHit_Scatter, 0.0f);
+    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
 }

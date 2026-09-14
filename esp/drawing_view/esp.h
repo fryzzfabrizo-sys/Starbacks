@@ -71,7 +71,6 @@ extern int  aimTargetMode;
 extern float aimFov;
 extern float aimDistance;
 extern float aimSpeed;
-Vector3 GetAimTargetPos(Vector3 head, Vector3 hip, int setting);
 // Thêm vào file esp.h:
 extern bool isNoReload;
 //phần cam cao
