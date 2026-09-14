@@ -1,40 +1,12 @@
 #pragma once
 
 #import "../../esp/Core/GameLogic.h"
+#import "../../esp/drawing_view/offset.h"
 #include <cmath>
 
 namespace UMAExternal {
 
-static constexpr uint64_t kAvatarManager = 0x708;
-static constexpr uint64_t kAvatar = 0x138;
-static constexpr uint64_t kUmaDataOffset = 0x30;
-static constexpr uint64_t kSkeleton = 0x138;
-static constexpr uint64_t kBoneHashDataBackup = 0x20;
-static constexpr uint64_t kListItems = 0x10;
-static constexpr uint64_t kListSize = 0x18;
-static constexpr uint64_t kArrayItems = 0x20;
-static constexpr uint64_t kBoneNameHash = 0x10;
-static constexpr uint64_t kBoneTransform = 0x18;
-
-static constexpr int32_t Head = -2111735698;
-static constexpr int32_t Neck = 96688289;
-static constexpr int32_t Hips = 1529948125;
-static constexpr int32_t Spine = -1051086991;
-static constexpr int32_t Spine1 = -1541408846;
-static constexpr int32_t LeftArm = 1604555488;
-static constexpr int32_t LeftForeArm = -1129867206;
-static constexpr int32_t LeftHand = 1892485702;
-static constexpr int32_t RightArm = -1391784435;
-static constexpr int32_t RightForeArm = 1507255706;
-static constexpr int32_t RightHand = -1367065569;
-static constexpr int32_t LeftLegUpper = -285661123;
-static constexpr int32_t LeftLeg = -1305646021;
-static constexpr int32_t LeftAnkle = -344692431;
-static constexpr int32_t LeftToe = -1258743979;
-static constexpr int32_t RightLegUpper = 952826536;
-static constexpr int32_t RightLeg = 1082519766;
-static constexpr int32_t RightAnkle = -115488425;
-static constexpr int32_t RightToe = 1179749304;
+// Bone hashes and memory offsets are centralized in offset.h.
 
 static inline bool valid(uint64_t value) {
     return value >= 0x100000000ULL && value <= 0x0000FFFFFFFFFFFFULL;
@@ -42,39 +14,54 @@ static inline bool valid(uint64_t value) {
 
 static inline uint64_t readUmaData(uint64_t avatarManager) {
     if (!valid(avatarManager)) return 0;
-    const uint64_t umaOffsets[] = { 0x30, 0x38 };
+    const uint64_t umaOffsets[] = { kUmaDataOffsetPrimary, kUmaDataOffsetFallback };
     for (uint64_t offset : umaOffsets) {
         uint64_t direct = ReadAddr<uint64_t>(avatarManager + offset);
-        if (valid(direct) && valid(ReadAddr<uint64_t>(direct + kSkeleton))) return direct;
+        if (valid(direct) && valid(ReadAddr<uint64_t>(direct + kUmaSkeletonOffset))) return direct;
     }
-    uint64_t avatar = ReadAddr<uint64_t>(avatarManager + kAvatar);
+    uint64_t avatar = ReadAddr<uint64_t>(avatarManager + kUmaAvatarOffset);
     if (!valid(avatar)) return 0;
     for (uint64_t offset : umaOffsets) {
         uint64_t data = ReadAddr<uint64_t>(avatar + offset);
-        if (valid(data) && valid(ReadAddr<uint64_t>(data + kSkeleton))) return data;
+        if (valid(data) && valid(ReadAddr<uint64_t>(data + kUmaSkeletonOffset))) return data;
     }
     return 0;
 }
 
 static inline uint64_t findBoneTransform(uint64_t player, int32_t hash) {
     if (!valid(player)) return 0;
-    uint64_t avatarManager = ReadAddr<uint64_t>(player + kAvatarManager);
+    uint64_t avatarManager = ReadAddr<uint64_t>(player + kUmaAvatarManagerOffset);
     uint64_t umaData = readUmaData(avatarManager);
     if (!valid(umaData)) return 0;
-    uint64_t skeleton = ReadAddr<uint64_t>(umaData + kSkeleton);
+    uint64_t skeleton = ReadAddr<uint64_t>(umaData + kUmaSkeletonOffset);
     if (!valid(skeleton)) return 0;
-    uint64_t list = ReadAddr<uint64_t>(skeleton + kBoneHashDataBackup);
-    if (!valid(list)) return 0;
-    int32_t count = ReadAddr<int32_t>(list + kListSize);
-    uint64_t items = ReadAddr<uint64_t>(list + kListItems);
-    if (!valid(items) || count <= 0 || count > 128) return 0;
-    uint64_t array = items;
-    if (!valid(array)) return 0;
-    for (int32_t i = 0; i < count; i++) {
-        uint64_t bone = ReadAddr<uint64_t>(array + kArrayItems + (uint64_t)i * sizeof(uint64_t));
-        if (!valid(bone)) continue;
-        if (ReadAddr<int32_t>(bone + kBoneNameHash) != hash) continue;
-        uint64_t transform = ReadAddr<uint64_t>(bone + kBoneTransform);
+
+    uint64_t list = ReadAddr<uint64_t>(skeleton + kUmaBoneListOffset);
+    if (valid(list)) {
+        int32_t count = ReadAddr<int32_t>(list + kUmaListSizeOffset);
+        uint64_t items = ReadAddr<uint64_t>(list + kUmaListItemsOffset);
+        if (valid(items) && count > 0 && count <= 128) {
+            for (int32_t i = 0; i < count; i++) {
+                uint64_t bone = ReadAddr<uint64_t>(items + kUmaArrayItemsOffset + (uint64_t)i * sizeof(uint64_t));
+                if (!valid(bone)) continue;
+                if (ReadAddr<int32_t>(bone + kUmaBoneNameHashOffset) != hash) continue;
+                uint64_t transform = ReadAddr<uint64_t>(bone + kUmaBoneTransformOffset);
+                if (valid(transform)) return transform;
+            }
+        }
+    }
+
+    uint64_t dictionary = ReadAddr<uint64_t>(skeleton + kUmaBoneDictionaryOffset);
+    if (!valid(dictionary)) return 0;
+    uint64_t entries = ReadAddr<uint64_t>(dictionary + kUmaDictionaryEntriesOffset);
+    int32_t entryCount = ReadAddr<int32_t>(dictionary + kUmaDictionaryCountOffset);
+    if (!valid(entries) || entryCount <= 0 || entryCount > 128) return 0;
+    for (int32_t i = 0; i < entryCount; i++) {
+        uint64_t entry = entries + kUmaArrayItemsOffset + (uint64_t)i * kUmaDictionaryEntryStride;
+        if (ReadAddr<int32_t>(entry) != hash) continue;
+        uint64_t bone = ReadAddr<uint64_t>(entry + kUmaDictionaryEntryValueOffset);
+        if (!valid(bone)) return 0;
+        uint64_t transform = ReadAddr<uint64_t>(bone + kUmaBoneTransformOffset);
         return valid(transform) ? transform : 0;
     }
     return 0;

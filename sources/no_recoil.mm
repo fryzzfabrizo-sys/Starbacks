@@ -8,10 +8,7 @@
 #include <thread>
 #include <vector>
 
-static constexpr uint32_t kNoRecoilOriginal = 1016018816U;
-static constexpr uint32_t kNoRecoilModified = 180U;
-static constexpr mach_vm_address_t kNoRecoilScanStart = 0x100000000ULL;
-static constexpr mach_vm_address_t kNoRecoilScanEnd = 0x4000000000ULL;
+// No Recoil scan values are centralized in offset.h.
 static std::mutex g_noRecoilLock;
 static std::vector<mach_vm_address_t> g_noRecoilResults;
 static std::atomic<bool> g_noRecoilEnabled{false};
@@ -19,10 +16,10 @@ static std::atomic<bool> g_noRecoilScanning{false};
 
 static std::vector<mach_vm_address_t> ScanNoRecoilValues() {
     std::vector<mach_vm_address_t> results;
-    mach_vm_address_t address = kNoRecoilScanStart;
+    mach_vm_address_t address = kNoRecoilScanStartAddressAddress;
     task_t task = mach_task_self();
 
-    while (address < kNoRecoilScanEnd) {
+    while (address < kNoRecoilScanEndAddressAddress) {
         mach_vm_address_t regionAddress = address;
         mach_vm_size_t regionSize = 0;
         uint32_t depth = 0;
@@ -37,8 +34,8 @@ static std::vector<mach_vm_address_t> ScanNoRecoilValues() {
         address = next;
         if (info.is_submap || !(info.protection & VM_PROT_READ) || !(info.protection & VM_PROT_WRITE)) continue;
 
-        mach_vm_address_t scanStart = std::max(regionAddress, kNoRecoilScanStart);
-        mach_vm_address_t scanEnd = std::min(next, kNoRecoilScanEnd);
+        mach_vm_address_t scanStart = std::max(regionAddress, kNoRecoilScanStartAddressAddress);
+        mach_vm_address_t scanEnd = std::min(next, kNoRecoilScanEndAddressAddress);
         for (mach_vm_address_t chunkStart = scanStart; chunkStart < scanEnd;) {
             mach_vm_size_t chunkSize = (mach_vm_size_t)std::min<mach_vm_address_t>(0x100000ULL, scanEnd - chunkStart);
             std::vector<uint8_t> bytes((size_t)chunkSize);
@@ -49,7 +46,7 @@ static std::vector<mach_vm_address_t> ScanNoRecoilValues() {
                 for (size_t i = 0; i + sizeof(uint32_t) <= limit; i += sizeof(uint32_t)) {
                     uint32_t value = 0;
                     std::memcpy(&value, bytes.data() + i, sizeof(value));
-                    if (value == kNoRecoilOriginal) results.push_back(chunkStart + i);
+                    if (value == kNoRecoilOriginalValue) results.push_back(chunkStart + i);
                 }
             }
             chunkStart += chunkSize;
@@ -63,7 +60,7 @@ void NoRecoilSetEnabled(bool enabled) {
         g_noRecoilEnabled.store(false, std::memory_order_release);
         std::lock_guard<std::mutex> lock(g_noRecoilLock);
         for (mach_vm_address_t address : g_noRecoilResults)
-            _write((long)address, &kNoRecoilOriginal, sizeof(kNoRecoilOriginal));
+            _write((long)address, &kNoRecoilOriginalValue, sizeof(kNoRecoilOriginalValue));
         g_noRecoilResults.clear();
         return;
     }
@@ -83,7 +80,7 @@ void NoRecoilSetEnabled(bool enabled) {
             if (g_noRecoilEnabled.load(std::memory_order_acquire)) {
                 g_noRecoilResults = results;
                 for (mach_vm_address_t address : g_noRecoilResults)
-                    _write((long)address, &kNoRecoilModified, sizeof(kNoRecoilModified));
+                    _write((long)address, &kNoRecoilModifiedValue, sizeof(kNoRecoilModifiedValue));
             }
         }
         g_noRecoilScanning.store(false, std::memory_order_release);

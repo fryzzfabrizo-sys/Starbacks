@@ -644,24 +644,24 @@ static void AppendUMALine(ESPGeometryBuffers *buffers, uint64_t pawn, float *mat
 
 static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float *matrix,
                               CGFloat vpW, CGFloat vpH, CGFloat layerW, CGFloat layerH) {
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Head, UMAExternal::Neck);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Neck, UMAExternal::Spine);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Spine, UMAExternal::Spine1);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Spine1, UMAExternal::Hips);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Spine1, UMAExternal::LeftArm);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftArm, UMAExternal::LeftForeArm);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftForeArm, UMAExternal::LeftHand);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Spine1, UMAExternal::RightArm);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightArm, UMAExternal::RightForeArm);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightForeArm, UMAExternal::RightHand);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Hips, UMAExternal::LeftLegUpper);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftLegUpper, UMAExternal::LeftLeg);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftLeg, UMAExternal::LeftAnkle);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftAnkle, UMAExternal::LeftToe);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Hips, UMAExternal::RightLegUpper);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightLegUpper, UMAExternal::RightLeg);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightLeg, UMAExternal::RightAnkle);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightAnkle, UMAExternal::RightToe);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneHeadHash, kUmaBoneNeckHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneNeckHash, kUmaBoneSpineHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpineHash, kUmaBoneSpineHash1);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpineHash1, kUmaBoneHipsHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpineHash1, kUmaBoneLeftArmHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftArmHash, kUmaBoneLeftForeArmHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftForeArmHash, kUmaBoneLeftHandHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpineHash1, kUmaBoneRightArmHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightArmHash, kUmaBoneRightForeArmHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightForeArmHash, kUmaBoneRightHandHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneHipsHash, kUmaBoneLeftLegUpperHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftLegUpperHash, kUmaBoneLeftLegHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftLegHash, kUmaBoneLeftAnkleHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftAnkleHash, kUmaBoneLeftToeHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneHipsHash, kUmaBoneRightLegUpperHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightLegUpperHash, kUmaBoneRightLegHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightLegHash, kUmaBoneRightAnkleHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightAnkleHash, kUmaBoneRightToeHash);
 }
 
 - (ESPFrameStats)renderESPWithBuffers:(ESPGeometryBuffers *)buffers

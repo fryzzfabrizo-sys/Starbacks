@@ -27,20 +27,10 @@ extern bool get_IsBot(uint64_t player);
 extern bool get_IsKnockedDown(uint64_t player);
 
 // ─── root transform offset ──────────────────────────────
-static constexpr uint64_t kMag_RootNode = 0x660;
-static constexpr uint64_t kMag_BodyPart = 0x10;
-static constexpr uint64_t kMag_Inner    = 0x10;
-static constexpr uint64_t kMag_Matrix   = 0x38;
-static constexpr uint64_t kMag_PosOff   = 0x90;
-
-// ─── Параметры ──────────────────────────────────────────
-static constexpr float kMagStrength        = 1.00f;
-static constexpr float kMagMaxDist         = 500.0f;
-static constexpr float kMagMinDist         = 1.0f;
-static constexpr float kMagMaxDisplacement = 6.00f;
-
-static constexpr int   kMagTickMs     = 4;
-static constexpr int   kMagReleaseMs  = 200;
+// Offset and limits are centralized in offset.h.
+static constexpr float kMagStrength = 1.00f;
+static constexpr float kMagMaxDist = 500.0f;
+static constexpr float kMagMinDist = 1.0f;
 
 static std::mutex        mag_lock;
 static std::atomic<bool> mag_hasData{false};
@@ -75,22 +65,22 @@ static Vector3 HeadWorld(uint64_t pawn) {
 
 static Vector3 RootWorld(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return {};
-    uint64_t node = ReadAddr<uint64_t>(pawn + kMag_RootNode);
+    uint64_t node = ReadAddr<uint64_t>(pawn + kMagRootNodeOffset);
     if (!isVaildPtr(node)) return {};
-    uint64_t tf = ReadAddr<uint64_t>(node + kMag_BodyPart);
+    uint64_t tf = ReadAddr<uint64_t>(node + kMagBodyPartOffset);
     if (!isVaildPtr(tf)) return {};
     return getPositionExt(tf);
 }
 
 static uint64_t MatPtr(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return 0;
-    uint64_t node = ReadAddr<uint64_t>(pawn + kMag_RootNode);
+    uint64_t node = ReadAddr<uint64_t>(pawn + kMagRootNodeOffset);
     if (!isVaildPtr(node)) return 0;
-    uint64_t tf = ReadAddr<uint64_t>(node + kMag_BodyPart);
+    uint64_t tf = ReadAddr<uint64_t>(node + kMagBodyPartOffset);
     if (!isVaildPtr(tf)) return 0;
-    uint64_t p3 = ReadAddr<uint64_t>(tf + kMag_Inner);
+    uint64_t p3 = ReadAddr<uint64_t>(tf + kMagInnerOffset);
     if (!isVaildPtr(p3)) return 0;
-    uint64_t mat = ReadAddr<uint64_t>(p3 + kMag_Matrix);
+    uint64_t mat = ReadAddr<uint64_t>(p3 + kMagMatrixOffset);
     return isVaildPtr(mat) ? mat : 0;
 }
 
@@ -98,7 +88,7 @@ static bool WriteLocalRoot(uint64_t pawn, Vector3 pos) {
     if (!isSane3(pos)) return false;
     uint64_t mat = MatPtr(pawn);
     if (!isVaildPtr(mat)) return false;
-    WriteAddr<Vector3>(mat + kMag_PosOff, pos);
+    WriteAddr<Vector3>(mat + kMagPositionOffset, pos);
     return true;
 }
 
@@ -143,8 +133,8 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
 
     Vector3 deltaOrig = { lerped.x - mag_originalRoot.x, 0.0f, lerped.z - mag_originalRoot.z };
     float dOrig = vlen2xz(deltaOrig);
-    if (dOrig > kMagMaxDisplacement && dOrig > 0.0001f) {
-        float s = kMagMaxDisplacement / dOrig;
+    if (dOrig > kMagMaxDisplacementValue && dOrig > 0.0001f) {
+        float s = kMagMaxDisplacementValue / dOrig;
         lerped.x = mag_originalRoot.x + deltaOrig.x * s;
         lerped.z = mag_originalRoot.z + deltaOrig.z * s;
     }
@@ -155,12 +145,12 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
 // ─── Воркер ─────────────────────────────────────────────
 static void MagnetWorker() {
     while (true) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(kMagTickMs));
+        std::this_thread::sleep_for(std::chrono::milliseconds(kMagTickMilliseconds));
 
         auto now = std::chrono::steady_clock::now();
         auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
                         now - mag_lastUpdate).count();
-        if (since > kMagReleaseMs) {
+        if (since > kMagReleaseMilliseconds) {
             mag_hasData.store(false, std::memory_order_release);
             continue;
         }
