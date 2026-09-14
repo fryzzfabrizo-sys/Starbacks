@@ -3,6 +3,7 @@
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
+#import "../esp/drawing_view/offset.h"
 #import "mahoa.h"
 #include <atomic>
 #include <mutex>
@@ -14,11 +15,7 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
-static constexpr uint64_t kHit_RayDir         = 0x40;
-static constexpr uint64_t kHit_StartPos       = 0x4C;
-static constexpr uint64_t kPlayer_HeadNode    = 0x638;
-static constexpr uint64_t kBodyPart_TransNode = 0x10;
+// Silent offsets are centralized in offset.h.
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
@@ -38,13 +35,13 @@ static Vector3 BonePos(uint64_t pawn, uint64_t boneOffset) {
     if (!validPtr(pawn)) return {};
     uint64_t bodyPart = ReadAddr<uint64_t>(pawn + boneOffset);
     if (!validPtr(bodyPart)) return {};
-    uint64_t node = ReadAddr<uint64_t>(bodyPart + kBodyPart_TransNode);
+    uint64_t node = ReadAddr<uint64_t>(bodyPart + kSilentBodyPartTransformOffset);
     if (!validPtr(node)) return {};
     return getPositionExt(node);
 }
 
 static Vector3 HeadPos(uint64_t pawn) {
-    return BonePos(pawn, kPlayer_HeadNode);
+    return BonePos(pawn, kSilentHeadNodeOffset);
 }
 
 static void SilentWorker() {
@@ -64,11 +61,11 @@ static void SilentWorker() {
             std::this_thread::yield();
             continue;
         }
-        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        Vector3 origin = ReadAddr<Vector3>(h + kHitStartPositionOffset);
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
-        WriteAddr<Vector3>(h + kHit_RayDir, diff);
+        WriteAddr<Vector3>(h + kHitRayDirectionOffset, diff);
         std::atomic_thread_fence(std::memory_order_seq_cst);
     }
 }
@@ -107,7 +104,7 @@ void RunSilentAim() {
         return;
     }
 
-    uint64_t aimPtr = ReadAddr<uint64_t>(local + kPlayer_LastAimInfo);
+    uint64_t aimPtr = ReadAddr<uint64_t>(local + kLastAimInfoOffset);
     if (!validPtr(aimPtr)) {
         g_hasData.store(false, std::memory_order_release);
         return;
@@ -126,10 +123,10 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+    Vector3 origin = ReadAddr<Vector3>(aimPtr + kHitStartPositionOffset);
     Vector3 diff   = { tPos.x - origin.x,
                        tPos.y - origin.y,
                        tPos.z - origin.z };
-    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
+    WriteAddr<Vector3>(aimPtr + kHitRayDirectionOffset, diff);
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }

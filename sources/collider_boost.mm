@@ -17,15 +17,7 @@
 extern uint64_t Moudule_Base;
 extern bool     aimMagnet;
 
-// ─── Offset'ы (из дампа v3) ─────────────────────────────
-static constexpr uint64_t kPlayer_CapsuleColliderManaged = 0xAB0;
-static constexpr uint64_t kManaged_NativePtr             = 0x10;
-static constexpr uint64_t kNative_RadiusOff              = 0x80;
-static constexpr uint64_t kNative_HeightOff              = 0x84;
-
-// ─── Размеры ────────────────────────────────────────────
-static constexpr float kBoostRadius = 7.00f;
-static constexpr float kBoostHeight = 14.00f;
+// Offsets and tuned collider limits are centralized in offset.h.
 
 static constexpr float kRadMin = 0.10f, kRadMax = 10.00f;
 static constexpr float kHeiMin = 0.80f, kHeiMax = 20.00f;
@@ -43,21 +35,21 @@ static inline bool validPtr(uint64_t p) {
 static void BoostOnePawn(uint64_t pawn) {
     if (!isVaildPtr(pawn)) return;
 
-    uint64_t managed = ReadAddr<uint64_t>(pawn + kPlayer_CapsuleColliderManaged);
+    uint64_t managed = ReadAddr<uint64_t>(pawn + kColliderManagedOffset);
     if (!validPtr(managed)) return;
 
-    uint64_t native = ReadAddr<uint64_t>(managed + kManaged_NativePtr);
+    uint64_t native = ReadAddr<uint64_t>(managed + kColliderNativePointerOffset);
     if (!validPtr(native)) return;
 
-    float r = ReadAddr<float>(native + kNative_RadiusOff);
-    float h = ReadAddr<float>(native + kNative_HeightOff);
+    float r = ReadAddr<float>(native + kColliderRadiusOffset);
+    float h = ReadAddr<float>(native + kColliderHeightOffset);
 
     if (!saneF(r) || !saneF(h))     return;
     if (r < kRadMin || r > kRadMax) return;
     if (h < kHeiMin || h > kHeiMax) return;
 
-    if (r < kBoostRadius) WriteAddr<float>(native + kNative_RadiusOff, kBoostRadius);
-    if (h < kBoostHeight) WriteAddr<float>(native + kNative_HeightOff, kBoostHeight);
+    if (r < kColliderBoostRadiusValue) WriteAddr<float>(native + kColliderRadiusOffset, kColliderBoostRadiusValue);
+    if (h < kColliderBoostHeightValue) WriteAddr<float>(native + kColliderHeightOffset, kColliderBoostHeightValue);
 }
 
 static void ColliderBoostWorker(void) {
