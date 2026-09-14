@@ -36,8 +36,6 @@ bool testGhost = NO;
 bool dunhanh = NO;
 
 bool isNoReload    = NO;
-bool isVohaDan     = NO;
-bool isFastFire    = NO;
 
 bool isShowFov = NO;
 
@@ -98,8 +96,6 @@ void ESPSyncFromPrefs(void) {
     isAimbot          = ESPPrefsBool(NSSENCRYPT("Aimbot"),          NO);
 
     isNoReload = ESPPrefsBool(NSSENCRYPT("NoReload"), NO);
-    isVohaDan  = ESPPrefsBool(NSSENCRYPT("VohaDan"), NO);
-    isFastFire = ESPPrefsBool(NSSENCRYPT("FastFire"), NO);
 
     isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
     aimsilent1 = ESPPrefsBool(NSSENCRYPT("SilentAim"), NO);
@@ -147,18 +143,13 @@ static int         gAimLockLostFrames     = 0;
 static const int   kAimLockMaxLostFrames  = 10;
 static const NSUInteger kMaxTextLayerPoolSize = 128;
 
-static const float kTestFastFireValue = 0.70f;
 static uint64_t s_memoryAttributes = 0;
 static bool s_memoryAttributesSaved = false;
 static bool s_originalNoReload = false;
-static bool s_originalNoConsumeAmmo = false;
-static float s_originalFastFire = 1.0f;
 
 static void RestoreMemoryFeatures(void) {
     if (!s_memoryAttributesSaved || !isVaildPtr(s_memoryAttributes)) return;
     WriteAddr<bool>(s_memoryAttributes + kShootNoReload, s_originalNoReload);
-    WriteAddr<bool>(s_memoryAttributes + kReloadNoConsumeAmmoClip, s_originalNoConsumeAmmo);
-    WriteAddr<float>(s_memoryAttributes + kFastFireOff, s_originalFastFire);
 }
 
 static void ResetMemoryFeatureState(void) {
@@ -179,14 +170,10 @@ static void ApplyMemoryFeatures(uint64_t player) {
 
     if (!s_memoryAttributesSaved) {
         s_originalNoReload = ReadAddr<bool>(attributes + kShootNoReload);
-        s_originalNoConsumeAmmo = ReadAddr<bool>(attributes + kReloadNoConsumeAmmoClip);
-        s_originalFastFire = ReadAddr<float>(attributes + kFastFireOff);
         s_memoryAttributesSaved = true;
     }
 
     WriteAddr<bool>(attributes + kShootNoReload, isNoReload ? true : s_originalNoReload);
-    WriteAddr<bool>(attributes + kReloadNoConsumeAmmoClip, isVohaDan ? true : s_originalNoConsumeAmmo);
-    WriteAddr<float>(attributes + kFastFireOff, isFastFire ? kTestFastFireValue : s_originalFastFire);
 }
 
 static uint64_t cachedMatchGame  = 0;
@@ -589,13 +576,8 @@ bool get_IsBot(uint64_t player) {
 bool get_IsKnockedDown(uint64_t player) {
     if (!isVaildPtr(player)) return false;
     if (get_CurHP(player) <= 0) return false;
-    uint64_t phx = ReadAddr<uint64_t>(player + kMyPhysXData);
-    if (isVaildPtr(phx)) {
-        uint64_t ghg = ReadAddr<uint64_t>(phx + (uint64_t)kPhxNpeononogeo);
-        if (isVaildPtr(ghg) && ReadAddr<uint32_t>(ghg + (uint64_t)kGhgState) == 8)
-            return true;
-    }
-    return ReadAddr<uint8_t>(player + kKnocked) != 0;
+    return ReadAddr<uint8_t>(player + (uint64_t)kKnockedDownBleeding) != 0 ||
+           ReadAddr<uint8_t>(player + (uint64_t)kKnockedDownBleedingGS) != 0;
 }
 
 void set_aim(uint64_t player, Quaternion rotation, float targetDist) {

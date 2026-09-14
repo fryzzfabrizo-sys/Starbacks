@@ -622,8 +622,6 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         y += 23.0f;
         NSArray *rows = @[
             @[ @"No Reload", @"NoReload" ],
-            @[ @"Infinite Ammo", @"VohaDan" ],
-            @[ @"Fast Fire", @"FastFire" ],
             @[ @"High Camera", @"camcao" ]
         ];
         for (NSUInteger i = 0; i < rows.count; i += 2) {

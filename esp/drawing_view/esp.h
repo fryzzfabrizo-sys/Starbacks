@@ -73,8 +73,6 @@ extern float aimDistance;
 extern float aimSpeed;
 // Thêm vào file esp.h:
 extern bool isNoReload;
-extern bool isVohaDan;
-extern bool isFastFire;
 //phần cam cao
 extern bool camcao;
 extern float Campc;

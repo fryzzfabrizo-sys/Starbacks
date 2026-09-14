@@ -51,6 +51,8 @@
 #define kPhxNpeononogeo         0x20
 #define kGhgState               0x10
 #define kKnocked                 0x1150
+#define kKnockedDownBleeding     0x11A0
+#define kKnockedDownBleedingGS   0x11A1
 #define kMatchPlayerDict        0x148
 #define kDictEntries            0x18
 #define kDictCount              0x20
@@ -73,8 +75,6 @@
 #define kWeaponCostAmmo         0x7B8   // protected bool m_CostAmmo
 #define kPlayerAttributes       0x700   // protected PlayerAttributes
 #define kShootNoReload          0xD9    // public bool ShootNoReload
-#define kReloadNoConsumeAmmoClip 0xD8    // public bool ReloadNoConsumeAmmoclip
-#define kFastFireOff            0x208  // Tốc độ bắn (Fast Fire)
 #define kFollowCamera            0x628   // LocalPlayer -> FollowCamera
 #define kFOVOffset               0x70 
 // Velocity prediction (OB54)
