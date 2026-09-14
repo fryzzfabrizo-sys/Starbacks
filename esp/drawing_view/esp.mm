@@ -709,6 +709,20 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
     if (!isVaildPtr(camTransform)) return stats;
     Vector3 myLoc = getPositionExt(camTransform);
 
+    // Направление камеры (для фильтра цели "спереди")
+    Quaternion myAimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
+    Vector3 camFwd = {
+        2.0f * (myAimQ.x * myAimQ.z + myAimQ.w * myAimQ.y),
+        2.0f * (myAimQ.y * myAimQ.z - myAimQ.w * myAimQ.x),
+        1.0f - 2.0f * (myAimQ.x * myAimQ.x + myAimQ.y * myAimQ.y)
+    };
+    float camFwdLen = sqrtf(camFwd.x*camFwd.x + camFwd.y*camFwd.y + camFwd.z*camFwd.z);
+    if (camFwdLen > 0.001f) {
+        camFwd.x /= camFwdLen;
+        camFwd.y /= camFwdLen;
+        camFwd.z /= camFwdLen;
+    }
+
     uint64_t playerDict = ReadAddr<uint64_t>(cachedMatch + kMatchPlayerDict);
     if (!isVaildPtr(playerDict)) return stats;
 
@@ -765,37 +779,44 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
             if (!isAimCheckVisible && !aimVis && !aimMagnet) valid = NO;
 
             if (valid) {
+                // ── ФИЛЬТР: цель должна быть ВПЕРЕДИ камеры (не сзади, не сбоку) ──
+                Vector3 toTarget = { aimPos.x - myLoc.x,
+                                     aimPos.y - myLoc.y,
+                                     aimPos.z - myLoc.z };
+                float toTargetLen = sqrtf(toTarget.x*toTarget.x +
+                                          toTarget.y*toTarget.y +
+                                          toTarget.z*toTarget.z);
+                bool facingTarget = false;
+                if (toTargetLen > 0.001f) {
+                    float inv = 1.0f / toTargetLen;
+                    float dot = (toTarget.x * camFwd.x +
+                                 toTarget.y * camFwd.y +
+                                 toTarget.z * camFwd.z) * inv;
+                    // dot >= 0.5 ≈ 60° конус впереди. Меняй на 0.3 (72°) или 0.7 (45°)
+                    if (dot >= 0.5f) facingTarget = true;
+                }
+                if (!facingTarget) goto next_pawn;
+
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix, (float)screenVpW, (float)screenVpH, (float)vw, (float)vh);
                 bool onScreen = (w2s.z > 0.001f);
 
-                // Если Aimbot или Silent Aim активны — используем их приоритет.
-                // Иначе (только магнит) — берём ближайшего к центру экрана.
                 bool useAimPriority = isAimbot || aimsilent1;
 
                 if (useAimPriority) {
-                    // Приоритет как у aimbot/silent — тот же bestTarget
                     if ((aimsilent1) && !isAimbot) {
+                        // Silent: ближайший к центру экрана среди тех кто СПЕРЕДИ
                         float score;
                         if (onScreen) {
                             float dx = w2s.x - center.x;
                             float dy = w2s.y - center.y;
                             score = dx * dx + dy * dy;
                         } else {
-                            Quaternion aimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
-                            Vector3 fwd = {
-                                2.0f * (aimQ.x * aimQ.z + aimQ.w * aimQ.y),
-                                2.0f * (aimQ.y * aimQ.z - aimQ.w * aimQ.x),
-                                1.0f - 2.0f * (aimQ.x * aimQ.x + aimQ.y * aimQ.y)
-                            };
-                            Vector3 toT = { aimPos.x - myLoc.x, aimPos.y - myLoc.y, aimPos.z - myLoc.z };
-                            float len2 = toT.x * toT.x + toT.y * toT.y + toT.z * toT.z;
-                            if (len2 > 0.01f) {
-                                float inv = 1.0f / std::sqrt(len2);
-                                float dot = (toT.x * fwd.x + toT.y * fwd.y + toT.z * fwd.z) * inv;
-                                score = 1e9f + (1.0f - dot);
-                            } else {
-                                score = FLT_MAX;
-                            }
+                            // Впереди, но не на экране — большой штраф, но всё же кандидат
+                            float inv = 1.0f / toTargetLen;
+                            float dot = (toTarget.x * camFwd.x +
+                                         toTarget.y * camFwd.y +
+                                         toTarget.z * camFwd.z) * inv;
+                            score = 1e9f + (1.0f - dot) * 1e6f;
                         }
                         if (score < bestScore) {
                             bestScore    = score;
@@ -804,7 +825,7 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
                             bestHeadPos  = aimPos;
                         }
                     } else {
-                        // aimbot
+                        // aimbot — FOV-приоритет
                         if (onScreen) {
                             float dx = w2s.x - center.x;
                             float dy = w2s.y - center.y;
@@ -818,7 +839,7 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
                         }
                     }
                 } else {
-                    // Только магнит — ближайший к центру экрана
+                    // Только магнит — ближайший к центру среди "спереди"
                     if (onScreen) {
                         float dx = w2s.x - center.x;
                         float dy = w2s.y - center.y;
@@ -834,6 +855,7 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
             }
         }
 
+    next_pawn:
         if (espVis) {
             if (isBot) stats.botCount++;
             else stats.playerCount++;
@@ -884,25 +906,10 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
         ResetSilentAim();
 
     // ── Aim Magnet (ТОЛЬКО в прицеле) ───────────────────────────────
-    // Держит цель пока она жива; переприцеливание (выход из ADS) сбрасывает.
     if (aimMagnet) {
         bool scoping = get_IsScoping(myPawn);
 
         if (scoping) {
-            Quaternion aimQ = ReadAddr<Quaternion>(myPawn + kAimRotation);
-            Vector3 camFwd = {
-                2.0f * (aimQ.x * aimQ.z + aimQ.w * aimQ.y),
-                2.0f * (aimQ.y * aimQ.z - aimQ.w * aimQ.x),
-                1.0f - 2.0f * (aimQ.x * aimQ.x + aimQ.y * aimQ.y)
-            };
-            float flen = sqrtf(camFwd.x*camFwd.x + camFwd.y*camFwd.y + camFwd.z*camFwd.z);
-            if (flen > 0.001f) {
-                camFwd.x /= flen;
-                camFwd.y /= flen;
-                camFwd.z /= flen;
-            }
-            // bestTarget может быть 0 — магнит сам удержит прежнюю цель,
-            // если она жива. Иначе возьмёт новую из bestTarget.
             RunAimMagnet(bestTarget, myLoc, camFwd, true);
         } else {
             ResetAimMagnet();
@@ -921,7 +928,7 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
+    self = [super init];
     if (!self) return nil;
 
     for (UIView *v in self.subviews) [v removeFromSuperview];
