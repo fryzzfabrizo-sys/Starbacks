@@ -1,6 +1,8 @@
 // magnet.mm
-// Aim Magnet через root transform (0x660).
-// Работает только в ADS. Y фиксирован. Displacement 5.0м.
+// Aim Magnet с удержанием цели.
+//   • не переключает цель пока она жива (и не нокнута/не бот при включённых флагах)
+//   • переприцеливание (выход из ADS → новый захват) сбрасывает цель
+//   • соблюдает isAimIgnoreBot / isAimIgnoreKnock
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -15,6 +17,14 @@
 extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimMagnet;
+
+// Флаги фильтров из esp.mm
+extern bool isAimIgnoreBot;
+extern bool isAimIgnoreKnock;
+
+// Хелперы проверки состояния из esp.mm
+extern bool get_IsBot(uint64_t player);
+extern bool get_IsKnockedDown(uint64_t player);
 
 // ─── root transform offset ──────────────────────────────
 static constexpr uint64_t kMag_RootNode = 0x660;
@@ -36,13 +46,14 @@ static std::mutex        mag_lock;
 static std::atomic<bool> mag_hasData{false};
 static std::atomic<bool> mag_started{false};
 
-static uint64_t mag_candidate = 0;
-static Vector3  mag_camPos    = {};
-static Vector3  mag_camFwd    = {};
+// Управляется из main thread
 static uint64_t mag_locked    = 0;
-
 static Vector3  mag_originalRoot = {};
 static bool     mag_originalRootValid = false;
+
+// Обновляется из main thread, читается воркером
+static Vector3  mag_camPos    = {};
+static Vector3  mag_camFwd    = {};
 
 static std::chrono::steady_clock::time_point mag_lastUpdate =
     std::chrono::steady_clock::now();
@@ -91,6 +102,15 @@ static bool WriteLocalRoot(uint64_t pawn, Vector3 pos) {
     return true;
 }
 
+// Цель всё ещё подходит для удержания?
+static bool TargetStillValid(uint64_t pawn) {
+    if (!isVaildPtr(pawn)) return false;
+    if (get_CurHP(pawn) <= 0) return false;
+    if (isAimIgnoreBot   && get_IsBot(pawn))         return false;
+    if (isAimIgnoreKnock && get_IsKnockedDown(pawn)) return false;
+    return true;
+}
+
 static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& camFwd) {
     Vector3 headW = HeadWorld(pawn);
     if (!isSane3(headW) || isZero3(headW)) return false;
@@ -132,6 +152,7 @@ static bool ApplyMagnet(uint64_t pawn, const Vector3& camPos, const Vector3& cam
     return WriteLocalRoot(pawn, lerped);
 }
 
+// ─── Воркер ─────────────────────────────────────────────
 static void MagnetWorker() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kMagTickMs));
@@ -140,42 +161,25 @@ static void MagnetWorker() {
         auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
                         now - mag_lastUpdate).count();
         if (since > kMagReleaseMs) {
-            mag_locked = 0;
-            mag_originalRootValid = false;
+            mag_hasData.store(false, std::memory_order_release);
             continue;
         }
 
-        if (!mag_hasData.load(std::memory_order_acquire)) {
-            mag_locked = 0;
-            mag_originalRootValid = false;
-            continue;
-        }
+        if (!mag_hasData.load(std::memory_order_acquire)) continue;
 
-        uint64_t candidate;
-        Vector3  camPos, camFwd;
+        uint64_t target;
+        Vector3 camPos, camFwd;
         {
             std::lock_guard<std::mutex> lk(mag_lock);
-            candidate = mag_candidate;
-            camPos    = mag_camPos;
-            camFwd    = mag_camFwd;
+            target = mag_locked;
+            camPos = mag_camPos;
+            camFwd = mag_camFwd;
         }
 
-        if (!isVaildPtr(mag_locked)) {
-            if (isVaildPtr(candidate) && get_CurHP(candidate) > 0) {
-                mag_locked = candidate;
-                mag_originalRoot = RootWorld(candidate);
-                mag_originalRootValid = isSane3(mag_originalRoot) && !isZero3(mag_originalRoot);
-            }
-            if (!isVaildPtr(mag_locked)) continue;
-        }
+        if (!isVaildPtr(target)) continue;
+        if (!TargetStillValid(target)) continue;
 
-        if (candidate != mag_locked || get_CurHP(mag_locked) <= 0) {
-            mag_locked = 0;
-            mag_originalRootValid = false;
-            continue;
-        }
-
-        ApplyMagnet(mag_locked, camPos, camFwd);
+        ApplyMagnet(target, camPos, camFwd);
     }
 }
 
@@ -185,31 +189,53 @@ void InitMagnetThread() {
         std::thread(MagnetWorker).detach();
 }
 
+// ─── Called each frame из esp.mm (main thread) ───────────
 void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward, bool enabled) {
     InitMagnetThread();
 
-    if (!aimMagnet || !enabled || !isVaildPtr(target)) {
+    if (!aimMagnet || !enabled) {
+        mag_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
+    // ── Логика удержания цели ────────────────────────────
+    if (isVaildPtr(mag_locked)) {
+        if (!TargetStillValid(mag_locked)) {
+            mag_locked = 0;
+            mag_originalRootValid = false;
+        }
+    }
+
+    if (!isVaildPtr(mag_locked)) {
+        if (isVaildPtr(target) && TargetStillValid(target)) {
+            mag_locked = target;
+            mag_originalRoot = RootWorld(target);
+            mag_originalRootValid = isSane3(mag_originalRoot) && !isZero3(mag_originalRoot);
+        }
+    }
+
+    if (!isVaildPtr(mag_locked)) {
         mag_hasData.store(false, std::memory_order_release);
         return;
     }
 
     {
         std::lock_guard<std::mutex> lk(mag_lock);
-        mag_candidate = target;
-        mag_camPos    = camPos;
-        mag_camFwd    = camForward;
+        mag_camPos = camPos;
+        mag_camFwd = camForward;
     }
     mag_lastUpdate = std::chrono::steady_clock::now();
     mag_hasData.store(true, std::memory_order_release);
+
+    ApplyMagnet(mag_locked, camPos, camForward);
 }
 
 void ResetAimMagnet() {
     mag_hasData.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lk(mag_lock);
-    mag_candidate = 0;
-    mag_camPos    = {};
-    mag_camFwd    = {};
-    mag_locked    = 0;
+    mag_locked = 0;
+    mag_camPos = {};
+    mag_camFwd = {};
     mag_originalRoot = {};
     mag_originalRootValid = false;
 }
