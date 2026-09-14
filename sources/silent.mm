@@ -69,6 +69,7 @@ static void SilentWorker() {
                            tPos.y - origin.y,
                            tPos.z - origin.z };
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
     }
 }
 
@@ -130,4 +131,5 @@ void RunSilentAim() {
                        tPos.y - origin.y,
                        tPos.z - origin.z };
     WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
 }

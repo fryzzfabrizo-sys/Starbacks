@@ -1,8 +1,10 @@
 #import "esp.h"
 #import "ESPPrefs.h"
 #import "../drawing_view/offset.h"
+#import "../UMA/UMASkeleton.h"
 #import "mahoa.h"
 #import "../../sources/silent.h"
+#import "../../sources/no_recoil.h"
 #import "../../sources/no_recoil.h"
 #import "../../sources/magnet.h"
 #import <QuartzCore/QuartzCore.h>
@@ -459,8 +461,8 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
         }
 
         if (IsAtLobby(Moudule_Base)) {
-            ResetMemoryFeatureState();
             NoRecoilSetEnabled(false);
+            ResetMemoryFeatureState();
             cachedMatchGame = 0;
             cachedMatch = 0;
             cachedCamera = 0;
@@ -623,6 +625,45 @@ void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
 bool get_IsFiring(uint64_t p)   { return isVaildPtr(p) && GetDataUInt16(p, 21) == 2; }
 bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) != 0; }
 
+static inline bool UMAFinitePoint(const Vector3& point) {
+    return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+}
+
+static void AppendUMALine(ESPGeometryBuffers *buffers, uint64_t pawn, float *matrix,
+                          CGFloat vpW, CGFloat vpH, CGFloat layerW, CGFloat layerH,
+                          int32_t a, int32_t b) {
+    Vector3 worldA{}, worldB{};
+    if (!UMAExternal::position(pawn, a, &worldA) || !UMAExternal::position(pawn, b, &worldB)) return;
+    Vector3 screenA = WorldToScreenLayer(worldA, matrix, vpW, vpH, layerW, layerH);
+    Vector3 screenB = WorldToScreenLayer(worldB, matrix, vpW, vpH, layerW, layerH);
+    if (screenA.z <= 0.001f || screenB.z <= 0.001f || !UMAFinitePoint(screenA) || !UMAFinitePoint(screenB)) return;
+    CGPathMoveToPoint(buffers->bonePath, NULL, screenA.x, screenA.y);
+    CGPathAddLineToPoint(buffers->bonePath, NULL, screenB.x, screenB.y);
+    buffers->boneDirty = true;
+}
+
+static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float *matrix,
+                              CGFloat vpW, CGFloat vpH, CGFloat layerW, CGFloat layerH) {
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Head, UMAExternal::Neck);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Neck, UMAExternal::Spine);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Spine, UMAExternal::Spine1);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Spine1, UMAExternal::Hips);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Spine1, UMAExternal::LeftArm);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftArm, UMAExternal::LeftForeArm);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftForeArm, UMAExternal::LeftHand);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Spine1, UMAExternal::RightArm);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightArm, UMAExternal::RightForeArm);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightForeArm, UMAExternal::RightHand);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Hips, UMAExternal::LeftLegUpper);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftLegUpper, UMAExternal::LeftLeg);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftLeg, UMAExternal::LeftAnkle);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::LeftAnkle, UMAExternal::LeftToe);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::Hips, UMAExternal::RightLegUpper);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightLegUpper, UMAExternal::RightLeg);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightLeg, UMAExternal::RightAnkle);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, UMAExternal::RightAnkle, UMAExternal::RightToe);
+}
+
 - (ESPFrameStats)renderESPWithBuffers:(ESPGeometryBuffers *)buffers
                             viewWidth:(CGFloat)vw viewHeight:(CGFloat)vh
                         matrixVpWidth:(CGFloat)vpW matrixVpHeight:(CGFloat)vpH {
@@ -645,8 +686,8 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
     if (!isVaildPtr(myPawn) || get_CurHP(myPawn) <= 0) return stats;
 
     stats.inMatch = true;
-    ApplyMemoryFeatures(myPawn);
     NoRecoilSetEnabled(isNoRecoil);
+    ApplyMemoryFeatures(myPawn);
 
     if (camcao) {
         uint64_t FollowCameraObj = ReadAddr<uint64_t>(myPawn + kFollowCamera);
@@ -798,6 +839,9 @@ bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) !
             else stats.playerCount++;
 
             RenderESPForPawn(buffers, ESPTextCallback, (__bridge void *)self, pawn, hp, dis, matrix, (float)vw, (float)vh, (float)screenVpW, (float)screenVpH);
+            if (isBone) {
+                AppendUMASkeleton(buffers, pawn, matrix, screenVpW, screenVpH, (CGFloat)vw, (CGFloat)vh);
+            }
         }
     }
 
