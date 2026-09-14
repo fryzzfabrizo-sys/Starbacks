@@ -576,8 +576,14 @@ bool get_IsBot(uint64_t player) {
 bool get_IsKnockedDown(uint64_t player) {
     if (!isVaildPtr(player)) return false;
     if (get_CurHP(player) <= 0) return false;
-    return ReadAddr<uint8_t>(player + (uint64_t)kKnockedDownBleeding) != 0 ||
-           ReadAddr<uint8_t>(player + (uint64_t)kKnockedDownBleedingGS) != 0;
+    if (ReadAddr<uint8_t>(player + (uint64_t)kKnockedDownBleeding) != 0 ||
+        ReadAddr<uint8_t>(player + (uint64_t)kKnockedDownBleedingGS) != 0) {
+        return true;
+    }
+    uint64_t physXData = ReadAddr<uint64_t>(player + (uint64_t)kMyPhysXData);
+    if (!isVaildPtr(physXData)) return false;
+    uint64_t geometry = ReadAddr<uint64_t>(physXData + (uint64_t)kPhxNpeononogeo);
+    return isVaildPtr(geometry) && ReadAddr<uint32_t>(geometry + (uint64_t)kGhgState) == 8;
 }
 
 void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
