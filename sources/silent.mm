@@ -1,6 +1,5 @@
 // silent.mm
 // Silent aim через ITransformNode головы (0x638)
-// + запись target position в +0x28 (как в аналоге)
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -18,7 +17,6 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
-static constexpr uint64_t kHit_TargetPos      = 0x28;
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;
 static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
@@ -62,22 +60,11 @@ static void SilentWorker() {
             std::this_thread::yield();
             continue;
         }
-
-        // Читаем origin viên đạn
-        Vector3 ammoBase = ReadAddr<Vector3>(h + kHit_StartPos);
-        if (!validVec(ammoBase)) {
-            std::this_thread::yield();
-            continue;
-        }
-
-        // Direction vector: target − origin
-        Vector3 diff = { tPos.x - ammoBase.x,
-                         tPos.y - ammoBase.y,
-                         tPos.z - ammoBase.z };
-
-        // Пишем ДВА поля: RayDir (+0x40) и TargetPos (+0x28)
+        Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
+        Vector3 diff   = { tPos.x - origin.x,
+                           tPos.y - origin.y,
+                           tPos.z - origin.z };
         WriteAddr<Vector3>(h + kHit_RayDir, diff);
-        WriteAddr<Vector3>(h + kHit_TargetPos, tPos);
     }
 }
 
@@ -134,13 +121,9 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенная запись в главном потоке (как было)
-    Vector3 ammoBase = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
-    if (validVec(ammoBase)) {
-        Vector3 diff = { tPos.x - ammoBase.x,
-                         tPos.y - ammoBase.y,
-                         tPos.z - ammoBase.z };
-        WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
-        WriteAddr<Vector3>(aimPtr + kHit_TargetPos, tPos);
-    }
+    Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+    Vector3 diff   = { tPos.x - origin.x,
+                       tPos.y - origin.y,
+                       tPos.z - origin.z };
+    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
 }
