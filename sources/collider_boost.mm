@@ -24,11 +24,11 @@ static constexpr uint64_t kNative_RadiusOff              = 0x80;
 static constexpr uint64_t kNative_HeightOff              = 0x84;
 
 // ─── Размеры ────────────────────────────────────────────
-static constexpr float kBoostRadius = 7.00f;
-static constexpr float kBoostHeight = 14.00f;
+static constexpr float kBoostRadius = 12.00f;
+static constexpr float kBoostHeight = 20.00f;
 
-static constexpr float kRadMin = 0.10f, kRadMax = 10.00f;
-static constexpr float kHeiMin = 0.80f, kHeiMax = 20.00f;
+static constexpr float kRadMin = 0.10f, kRadMax = 14.00f;
+static constexpr float kHeiMin = 0.80f, kHeiMax = 24.00f;
 
 static constexpr int kStartupDelayMs = 3000;
 static constexpr int kTickMs         = 40;
