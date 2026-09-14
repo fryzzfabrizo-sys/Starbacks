@@ -621,7 +621,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         [self sectionLabel:@"Runtime functions" y:y width:contentWidth];
         y += 23.0f;
         NSArray *rows = @[
-            @[ @"No ReLoad", @"NoReLoad" ],
+            @[ @"No Reload", @"NoReload" ],
             @[ @"Infinite Ammo", @"VohaDan" ],
             @[ @"Fast Fire", @"FastFire" ],
             @[ @"High Camera", @"camcao" ]

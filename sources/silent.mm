@@ -17,6 +17,7 @@ extern bool     aimsilent1;
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
+static constexpr uint64_t kHit_Scatter        = 0x5C;
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;
 static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
@@ -64,7 +65,15 @@ static void SilentWorker() {
         Vector3 diff   = { tPos.x - origin.x,
                            tPos.y - origin.y,
                            tPos.z - origin.z };
-        WriteAddr<Vector3>(h + kHit_RayDir, diff);
+        float lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+        if (lenSq <= 0.0001f) {
+            std::this_thread::yield();
+            continue;
+        }
+        float invLen = 1.0f / std::sqrt(lenSq);
+        Vector3 direction = { diff.x * invLen, diff.y * invLen, diff.z * invLen };
+        WriteAddr<Vector3>(h + kHit_RayDir, direction);
+        WriteAddr<float>(h + kHit_Scatter, 0.0f);
     }
 }
 
@@ -125,5 +134,13 @@ void RunSilentAim() {
     Vector3 diff   = { tPos.x - origin.x,
                        tPos.y - origin.y,
                        tPos.z - origin.z };
-    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
+    float lenSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+    if (lenSq <= 0.0001f) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+    float invLen = 1.0f / std::sqrt(lenSq);
+    Vector3 direction = { diff.x * invLen, diff.y * invLen, diff.z * invLen };
+    WriteAddr<Vector3>(aimPtr + kHit_RayDir, direction);
+    WriteAddr<float>(aimPtr + kHit_Scatter, 0.0f);
 }

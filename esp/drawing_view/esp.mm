@@ -147,7 +147,7 @@ static int         gAimLockLostFrames     = 0;
 static const int   kAimLockMaxLostFrames  = 10;
 static const NSUInteger kMaxTextLayerPoolSize = 128;
 
-static const float kTestFastFireValue = 0.2f;
+static const float kTestFastFireValue = 0.70f;
 static uint64_t s_memoryAttributes = 0;
 static bool s_memoryAttributesSaved = false;
 static bool s_originalNoReload = false;
