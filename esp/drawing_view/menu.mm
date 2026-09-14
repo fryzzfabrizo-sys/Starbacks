@@ -7,7 +7,7 @@
 #import <UIKit/UIKit.h>
 
 static const CGFloat kMenuButtonSize = 56.0f;
-static const CGFloat kAccentR = 1.0f, kAccentG = 0.35f, kAccentB = 0.2f;
+static const CGFloat kAccentR = 0.32f, kAccentG = 0.88f, kAccentB = 0.94f;
 static const CGFloat kAuxButtonSize = 46.0f;
 static const CGFloat kAuxGap = 8.0f;
 
@@ -93,7 +93,15 @@ static NSString *titleForAimPos(int aimPos) {
 
     _menuButton = [UIButton buttonWithType:UIButtonTypeCustom];
     _menuButton.frame = CGRectMake(20, 100, kMenuButtonSize, kMenuButtonSize);
-    _menuButton.backgroundColor = [UIColor clearColor];
+    _menuButton.backgroundColor = [UIColor colorWithRed:kAccentR green:kAccentG blue:kAccentB alpha:0.16f];
+    _menuButton.layer.cornerRadius = kMenuButtonSize / 2.0f;
+    _menuButton.layer.borderWidth = 1.0f;
+    _menuButton.layer.borderColor = [UIColor colorWithRed:kAccentR green:kAccentG blue:kAccentB alpha:0.72f].CGColor;
+    _menuButton.layer.shadowColor = [UIColor colorWithRed:kAccentR green:kAccentG blue:kAccentB alpha:1.0f].CGColor;
+    _menuButton.layer.shadowOpacity = 0.30f;
+    _menuButton.layer.shadowRadius = 12.0f;
+    _menuButton.layer.shadowOffset = CGSizeZero;
+    _menuButton.clipsToBounds = NO;
     
     UIImage *icon = FloatButtonIcon();
     if (!icon) {

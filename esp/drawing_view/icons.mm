@@ -10,8 +10,8 @@ UIImage *FloatButtonIcon(void) {
     if (base64String.length == 0) {
         NSLog(@"[FloatButtonIcon] ⚠️ Chưa có Base64, dùng fallback");
         if (@available(iOS 13.0, *)) {
-            UIImage *fallback = [UIImage systemImageNamed:@"gearshape.fill"];
-            return [fallback imageWithTintColor:[UIColor grayColor] 
+            UIImage *fallback = [UIImage systemImageNamed:@"square.grid.2x2.fill"];
+            return [fallback imageWithTintColor:[UIColor colorWithRed:0.32f green:0.88f blue:0.94f alpha:1.0f]
                                    renderingMode:UIImageRenderingModeAlwaysOriginal];
         }
         return nil;
