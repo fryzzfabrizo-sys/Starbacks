@@ -7,7 +7,7 @@ namespace UMAExternal {
 
 static constexpr uint64_t kAvatarManager = 0x708;
 static constexpr uint64_t kAvatar = 0x138;
-static constexpr uint64_t kUmaData = 0x30;
+static constexpr uint64_t kUmaDataOffset = 0x30;
 static constexpr uint64_t kSkeleton = 0x138;
 static constexpr uint64_t kBoneHashDataBackup = 0x20;
 static constexpr uint64_t kListItems = 0x10;
@@ -42,11 +42,11 @@ static inline bool valid(uint64_t value) {
 
 static inline uint64_t readUmaData(uint64_t avatarManager) {
     if (!valid(avatarManager)) return 0;
-    uint64_t direct = ReadAddr<uint64_t>(avatarManager + kUmaData);
+    uint64_t direct = ReadAddr<uint64_t>(avatarManager + kUmaDataOffset);
     if (valid(direct)) return direct;
     uint64_t avatar = ReadAddr<uint64_t>(avatarManager + kAvatar);
     if (!valid(avatar)) return 0;
-    return ReadAddr<uint64_t>(avatar + kUmaData);
+    return ReadAddr<uint64_t>(avatar + kUmaDataOffset);
 }
 
 static inline uint64_t findBoneTransform(uint64_t player, int32_t hash) {
