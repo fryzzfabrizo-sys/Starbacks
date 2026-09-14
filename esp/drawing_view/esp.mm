@@ -928,7 +928,7 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
-    self = [super init];
+    self = [super initWithFrame:frame];
     if (!self) return nil;
 
     for (UIView *v in self.subviews) [v removeFromSuperview];
