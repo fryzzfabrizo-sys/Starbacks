@@ -22,6 +22,7 @@ $(APPLICATION_NAME)_FILES += $(wildcard esp/Core/*.cpp)
 # Thêm file nguồn oxorany.cpp vào để biên dịch chung
 $(APPLICATION_NAME)_FILES += oxorany/oxorany.cpp
 $(APPLICATION_NAME)_FILES += API/APIClient.mm
+$(APPLICATION_NAME)_FILES += sources/kexploit/physmem.m
 
 sources/KIF/UITouch-KIFAdditions.m_CFLAGS := $(filter-out -mllvm -enable-fco,$(TESTTIPA_CFLAGS))
 
