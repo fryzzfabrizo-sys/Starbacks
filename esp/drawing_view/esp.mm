@@ -3,8 +3,8 @@
 #import "../drawing_view/offset.h"
 #import "mahoa.h"
 #import "../../sources/silent.h"
+#import "../../sources/no_recoil.h"
 #import "../../sources/magnet.h"
-#import "../../sources/UMA/UMASkeleton.h"
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #import <notify.h>
@@ -29,7 +29,6 @@ bool isEspBot   = NO;
 bool isWeapon   = NO;
 bool BackJump = NO;
 bool isBone = NO;
-bool Norecoil = NO;
 bool camcao = NO;
 bool hoihp = NO;
 bool danthg = NO;
@@ -37,6 +36,7 @@ bool testGhost = NO;
 bool dunhanh = NO;
 
 bool isNoReload    = NO;
+bool isNoRecoil    = NO;
 
 bool isShowFov = NO;
 
@@ -84,7 +84,6 @@ void ESPSyncFromPrefs(void) {
     hoihp = ESPPrefsBool(NSSENCRYPT("hoihp"),    NO);
     danthg = ESPPrefsBool(NSSENCRYPT("danthg"),    NO);
 
-    Norecoil    = ESPPrefsBool(NSSENCRYPT("Norecoil"),    NO);
     isBone   =  ESPPrefsBool(NSSENCRYPT("Bone"),   NO);
     isLine   =  ESPPrefsBool(NSSENCRYPT("Line"),   NO);
     isEspBot = ESPPrefsBool(NSSENCRYPT("EspBot"), NO);
@@ -97,6 +96,7 @@ void ESPSyncFromPrefs(void) {
     isAimbot          = ESPPrefsBool(NSSENCRYPT("Aimbot"),          NO);
 
     isNoReload = ESPPrefsBool(NSSENCRYPT("NoReload"), NO);
+    isNoRecoil = ESPPrefsBool(NSSENCRYPT("NoRecoil"), NO);
 
     isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
     aimsilent1 = ESPPrefsBool(NSSENCRYPT("SilentAim"), NO);
@@ -460,6 +460,7 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
 
         if (IsAtLobby(Moudule_Base)) {
             ResetMemoryFeatureState();
+            NoRecoilSetEnabled(false);
             cachedMatchGame = 0;
             cachedMatch = 0;
             cachedCamera = 0;
@@ -622,29 +623,6 @@ void set_aim(uint64_t player, Quaternion rotation, float targetDist) {
 bool get_IsFiring(uint64_t p)   { return isVaildPtr(p) && GetDataUInt16(p, 21) == 2; }
 bool get_IsScoping(uint64_t p)  { return isVaildPtr(p) && GetDataUInt16(p, 12) != 0; }
 
-static void AppendUMASkeleton(CGMutablePathRef path, uint64_t pawn, float vpW, float vpH,
-                              float viewW, float viewH) {
-    static const char *segments[][2] = {
-        {"Head", "Neck"}, {"Neck", "Spine"}, {"Spine", "Spine1"}, {"Spine1", "Hips"},
-        {"Neck", "LeftClav"}, {"LeftClav", "LeftArm"}, {"LeftArm", "LeftForeArm"}, {"LeftForeArm", "LeftHand"},
-        {"Neck", "RightClav"}, {"RightClav", "RightArm"}, {"RightArm", "RightForeArm"}, {"RightForeArm", "RightHand"},
-        {"Hips", "LeftLegUpper"}, {"LeftLegUpper", "LeftLeg"}, {"LeftLeg", "LeftAnkle"}, {"LeftAnkle", "LeftToe"},
-        {"Hips", "RightLegUpper"}, {"RightLegUpper", "RightLeg"}, {"RightLeg", "RightAnkle"}, {"RightAnkle", "RightToe"}
-    };
-    float *matrix = GetViewMatrix(cachedCamera);
-    if (!matrix) return;
-    for (const auto &segment : segments) {
-        Vector3 from = UMABoneWorldPosition(pawn, Moudule_Base, segment[0]);
-        Vector3 to = UMABoneWorldPosition(pawn, Moudule_Base, segment[1]);
-        if (IsZeroVec(from) || IsZeroVec(to)) continue;
-        Vector3 fromScreen = WorldToScreenLayer(from, matrix, vpW, vpH, viewW, viewH);
-        Vector3 toScreen = WorldToScreenLayer(to, matrix, vpW, vpH, viewW, viewH);
-        if (fromScreen.z <= 0.001f || toScreen.z <= 0.001f) continue;
-        CGPathMoveToPoint(path, NULL, fromScreen.x, fromScreen.y);
-        CGPathAddLineToPoint(path, NULL, toScreen.x, toScreen.y);
-    }
-}
-
 - (ESPFrameStats)renderESPWithBuffers:(ESPGeometryBuffers *)buffers
                             viewWidth:(CGFloat)vw viewHeight:(CGFloat)vh
                         matrixVpWidth:(CGFloat)vpW matrixVpHeight:(CGFloat)vpH {
@@ -668,6 +646,7 @@ static void AppendUMASkeleton(CGMutablePathRef path, uint64_t pawn, float vpW, f
 
     stats.inMatch = true;
     ApplyMemoryFeatures(myPawn);
+    NoRecoilSetEnabled(isNoRecoil);
 
     if (camcao) {
         uint64_t FollowCameraObj = ReadAddr<uint64_t>(myPawn + kFollowCamera);
@@ -737,7 +716,6 @@ static void AppendUMASkeleton(CGMutablePathRef path, uint64_t pawn, float vpW, f
         bool    aimVis   = getIsVisible(pawn);
         bool    espVis   = aimVis || isKnocked;
         if (!espVis) continue;
-        if (isBone) AppendUMASkeleton(buffers->bonePath, pawn, screenVpW, screenVpH, (float)vw, (float)vh);
 
         if ((isAimbot || aimsilent1 || aimMagnet) && dis <= aimDistance) {
             BOOL valid = YES;
