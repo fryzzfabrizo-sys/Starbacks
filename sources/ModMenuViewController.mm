@@ -1,4 +1,3 @@
-// ModMenuViewController.mm
 #import "ModMenuViewController.h"
 #import "../esp/drawing_view/esp.h"
 #import "../esp/drawing_view/ESPPrefs.h"
@@ -7,49 +6,26 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// ===== KÍCH THƯỚC - GIỮ NGUYÊN =====
-static const CGFloat kPanelWidth = 370.0f;  
-static const CGFloat kPanelHeight = 300.0f; 
-static const CGFloat kHeaderHeight = 44.0f;
-static const CGFloat kSideTabWidth = 90.0f;
-static const CGFloat kRowHeight = 38.0f;
+static const CGFloat kPanelWidth = 408.0f;
+static const CGFloat kPanelHeight = 344.0f;
+static const CGFloat kHeaderHeight = 62.0f;
+static const CGFloat kSideTabWidth = 82.0f;
+static const CGFloat kRowHeight = 40.0f;
 static const CGFloat kScrollBarWidth = 3.0f;
-static const CGFloat kCheckboxSize = 20.0f;
+static const CGFloat kCheckboxSize = 18.0f;
+static const CGFloat kCornerRadius = 18.0f;
 
-// ========== MÀU SẮC MỚI - BẾ NGUYÊN TỪ IMGUI ==========
-// Màu nền chính: Xanh than nhạt trong suốt (WindowBg ImGui)
-#define kColorMenuBG [UIColor colorWithRed:0.12f green:0.22f blue:0.32f alpha:0.55f] 
+static UIColor *SBColor(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
+    return [UIColor colorWithRed:r green:g blue:b alpha:a];
+}
 
-// Màu chủ đạo cho nút, tab, checkbox (Thay vì màu xanh nước biển đậm, lấy màu chủ đạo của ImGui)
-#define kColorAccent [UIColor colorWithRed:0.18f green:0.32f blue:0.48f alpha:0.85f] 
-#define kColorAccentBorder [UIColor colorWithRed:0.18f green:0.32f blue:0.48f alpha:0.55f]
-
-// Màu Header & Tab background
-#define kColorHeaderBG [UIColor colorWithRed:0.12f green:0.25f blue:0.38f alpha:0.50f] 
-#define kColorTabInactive [UIColor colorWithRed:0.12f green:0.22f blue:0.32f alpha:0.35f]
-
-// Màu viền & phân cách
-#define kColorBorder [UIColor colorWithRed:0.80f green:0.85f blue:0.90f alpha:0.15f]
-#define kColorSeparator [UIColor colorWithRed:0.80f green:0.85f blue:0.90f alpha:0.10f]
-
-// Màu chữ: Trắng tinh
-#define kColorText [UIColor colorWithWhite:1.0f alpha:1.0f]
-#define kColorMuted [UIColor colorWithWhite:0.85f alpha:0.70f]
-
-// Checkbox & Slider màu
-#define kColorCheckOn kColorAccent
-#define kColorCheckBorder [UIColor colorWithWhite:1.0f alpha:0.40f]
-
-// Màu nút Exit HUD (Giữ nguyên đỏ nhạt cho nổi bật)
-#define kColorDangerBG [UIColor colorWithRed:1.00f green:0.23f blue:0.19f alpha:0.20f]
-#define kColorDanger [UIColor colorWithRed:1.00f green:0.26f blue:0.26f alpha:1.0f]
-
-// Slider & Segmented
-#define kColorSliderTrack [UIColor colorWithWhite:1.0f alpha:0.20f]
-#define kColorSliderFill kColorAccent
-#define kColorSegActive [UIColor colorWithWhite:1.0f alpha:0.15f]
-#define kColorSegBG [UIColor colorWithRed:0.00f green:0.00f blue:0.00f alpha:0.35f]
-// ==========================================================
+static UIColor *SBAccent(void) { return SBColor(0.32f, 0.88f, 0.94f, 1.0f); }
+static UIColor *SBAccentDim(void) { return SBColor(0.14f, 0.52f, 0.60f, 1.0f); }
+static UIColor *SBText(void) { return SBColor(0.94f, 0.98f, 1.0f, 1.0f); }
+static UIColor *SBMuted(void) { return SBColor(0.62f, 0.70f, 0.75f, 1.0f); }
+static UIColor *SBBorder(void) { return SBColor(0.55f, 0.76f, 0.80f, 0.16f); }
+static UIColor *SBPanel(void) { return SBColor(0.035f, 0.055f, 0.075f, 0.94f); }
+static UIColor *SBCard(void) { return SBColor(0.075f, 0.105f, 0.13f, 0.74f); }
 
 static const NSInteger kSegmentTrackTag = 9101;
 static const NSInteger kSegmentLabelTag = 9201;
@@ -64,19 +40,23 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 @interface ModMenuViewController () <UIGestureRecognizerDelegate>
 @property (nonatomic, assign) MenuTab currentTab;
 @property (nonatomic, strong) UIView *floatingPanel;
+@property (nonatomic, strong) UIView *panelSurface;
 @property (nonatomic, strong) UIScrollView *contentScrollView;
 @property (nonatomic, strong) UIView *contentContainer;
 @property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
 @property (nonatomic, strong) UIButton *headerButton;
 @property (nonatomic, strong) UIButton *closeButton;
-
+@property (nonatomic, strong) UILabel *headerTitleLabel;
+@property (nonatomic, strong) UILabel *headerSubtitleLabel;
+@property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UIView *statusDot;
+@property (nonatomic, strong) UIView *statusPill;
 @property (nonatomic, assign) NSInteger trackingPointerId;
 @property (nonatomic, assign) BOOL touchOnClose;
 @property (nonatomic, assign) BOOL touchOnExitHUD;
 @property (nonatomic, assign) BOOL menuDragging;
 @property (nonatomic, assign) CGPoint menuDragStartOrigin;
 @property (nonatomic, assign) CGPoint menuDragStartTouch;
-
 @property (nonatomic, weak) UIView *activeCheckbox;
 @property (nonatomic, strong) UIView *scrollbarTrack;
 @property (nonatomic, strong) UIView *scrollbarThumb;
@@ -85,7 +65,6 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 @property (nonatomic, weak) UIView *segmentedRowTracking;
 @property (nonatomic, assign) CGFloat scrollbarDragStartY;
 @property (nonatomic, assign) CGFloat scrollbarDragStartOffsetY;
-
 @property (nonatomic, assign) CGFloat scrollVelocity;
 @property (nonatomic, strong) CADisplayLink *scrollDisplayLink;
 @property (nonatomic, assign) CGFloat scrollLastTouchY;
@@ -95,17 +74,14 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 
 @implementation ModMenuViewController
 
-// ... (Tất cả các hàm setup bên dưới giữ nguyên y hệt, không cần thay đổi gì nữa) ...
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor clearColor];
     self.view.multipleTouchEnabled = YES;
-
     _trackingPointerId = -1;
     _currentTab = MenuTabESP;
     _tabButtons = [NSMutableArray array];
     _isScrollingContent = NO;
-
     [self setupFloatingPanel];
     [self setupHeaderBar];
     [self setupTabBar];
@@ -119,30 +95,25 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     [self.view addGestureRecognizer:tap];
 }
 
-- (void)iPadLayoutCheck {}
-
 - (void)viewWillLayoutSubviews {
     [super viewWillLayoutSubviews];
-    if (_floatingPanel) {
-        CGRect screen = self.view.bounds;
-        CGRect frame = _floatingPanel.frame;
-        if (frame.origin.x < 0) frame.origin.x = 0;
-        if (frame.origin.y < 0) frame.origin.y = 0;
-        if (CGRectGetMaxX(frame) > screen.size.width)
-            frame.origin.x = screen.size.width - frame.size.width;
-        if (CGRectGetMaxY(frame) > screen.size.height)
-            frame.origin.y = screen.size.height - frame.size.height;
-        _floatingPanel.frame = frame;
-    }
+    if (!_floatingPanel) return;
+    CGRect screen = self.view.bounds;
+    CGRect frame = _floatingPanel.frame;
+    CGFloat maxX = MAX(0.0f, screen.size.width - frame.size.width);
+    CGFloat maxY = MAX(0.0f, screen.size.height - frame.size.height);
+    frame.origin.x = MAX(0.0f, MIN(maxX, frame.origin.x));
+    frame.origin.y = MAX(0.0f, MIN(maxY, frame.origin.y));
+    _floatingPanel.frame = frame;
 }
 
 - (CGPoint)loadPanelPosition {
     CGFloat x = [[NSUserDefaults standardUserDefaults] floatForKey:@"FloatingPanelX"];
     CGFloat y = [[NSUserDefaults standardUserDefaults] floatForKey:@"FloatingPanelY"];
     if (x <= 10.0f && y <= 10.0f) {
-        CGRect screen = [UIScreen mainScreen].bounds;
-        x = MAX(0, (screen.size.width - kPanelWidth) / 2.0f);
-        y = 80.0f;
+        CGRect screen = self.view.bounds;
+        x = MAX(8.0f, (screen.size.width - kPanelWidth) / 2.0f);
+        y = MAX(18.0f, (screen.size.height - kPanelHeight) / 2.0f);
     }
     return CGPointMake(x, y);
 }
@@ -151,172 +122,214 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     CGPoint pos = [self loadPanelPosition];
     _floatingPanel = [[UIView alloc] initWithFrame:CGRectMake(pos.x, pos.y, kPanelWidth, kPanelHeight)];
     _floatingPanel.backgroundColor = [UIColor clearColor];
-    _floatingPanel.layer.cornerRadius = 12.0f;
-    
-    _floatingPanel.layer.borderWidth = 1.0f;
-    _floatingPanel.layer.borderColor = kColorBorder.CGColor;
-    
+    _floatingPanel.layer.cornerRadius = kCornerRadius;
     _floatingPanel.layer.shadowColor = [UIColor blackColor].CGColor;
-    _floatingPanel.layer.shadowOpacity = 0.5f;
-    _floatingPanel.layer.shadowRadius = 30.0f;
-    _floatingPanel.layer.shadowOffset = CGSizeMake(0, 10);
-    
+    _floatingPanel.layer.shadowOpacity = 0.68f;
+    _floatingPanel.layer.shadowRadius = 28.0f;
+    _floatingPanel.layer.shadowOffset = CGSizeMake(0, 16);
     _floatingPanel.layer.masksToBounds = NO;
-    _floatingPanel.clipsToBounds = NO;
     [self.view addSubview:_floatingPanel];
 
-    UIView *clip = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kPanelWidth, kPanelHeight)];
+    UIView *clip = [[UIView alloc] initWithFrame:_floatingPanel.bounds];
     clip.backgroundColor = [UIColor clearColor];
-    clip.layer.cornerRadius = 12.0f;
+    clip.layer.cornerRadius = kCornerRadius;
     clip.clipsToBounds = YES;
-    clip.userInteractionEnabled = NO;
     clip.tag = 7777;
     [_floatingPanel addSubview:clip];
 
     if (@available(iOS 13.0, *)) {
-        UIBlurEffect *blurEffect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
-        UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
-        blurView.frame = clip.bounds;
-        blurView.alpha = 0.80f;
-        [clip addSubview:blurView];
+        UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterialDark]];
+        blur.frame = clip.bounds;
+        blur.alpha = 0.82f;
+        [clip addSubview:blur];
     }
 
-    UIView *bg = [[UIView alloc] initWithFrame:clip.bounds];
-    bg.backgroundColor = kColorMenuBG; 
-    [clip addSubview:bg];
+    _panelSurface = [[UIView alloc] initWithFrame:clip.bounds];
+    _panelSurface.backgroundColor = SBPanel();
+    _panelSurface.userInteractionEnabled = NO;
+    [clip addSubview:_panelSurface];
+
+    CAGradientLayer *wash = [CAGradientLayer layer];
+    wash.frame = clip.bounds;
+    wash.colors = @[
+        (__bridge id)SBColor(0.10f, 0.24f, 0.27f, 0.30f).CGColor,
+        (__bridge id)SBColor(0.035f, 0.055f, 0.075f, 0.04f).CGColor,
+        (__bridge id)SBColor(0.01f, 0.02f, 0.03f, 0.48f).CGColor
+    ];
+    wash.startPoint = CGPointMake(0.0f, 0.0f);
+    wash.endPoint = CGPointMake(1.0f, 1.0f);
+    [clip.layer insertSublayer:wash above:_panelSurface.layer];
+
+    UIView *edge = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kPanelWidth, 1)];
+    edge.backgroundColor = SBAccent();
+    edge.alpha = 0.76f;
+    [clip addSubview:edge];
+
+    _floatingPanel.layer.borderWidth = 1.0f;
+    _floatingPanel.layer.borderColor = SBBorder().CGColor;
 }
 
 - (UIView *)clipContainer { return [_floatingPanel viewWithTag:7777]; }
 
 - (void)setupHeaderBar {
     UIView *clip = [self clipContainer];
+    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kPanelWidth, kHeaderHeight)];
+    header.backgroundColor = SBColor(0.02f, 0.04f, 0.055f, 0.62f);
+    [clip addSubview:header];
 
-    UIView *headerBG = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kPanelWidth, kHeaderHeight)];
-    headerBG.backgroundColor = kColorHeaderBG;
-    [clip addSubview:headerBG];
+    UIView *logo = [[UIView alloc] initWithFrame:CGRectMake(14, 14, 34, 34)];
+    logo.backgroundColor = SBAccentDim();
+    logo.layer.cornerRadius = 10.0f;
+    logo.layer.borderWidth = 1.0f;
+    logo.layer.borderColor = SBAccent().CGColor;
+    [header addSubview:logo];
 
-    UIView *hLine = [[UIView alloc] initWithFrame:CGRectMake(0, kHeaderHeight - 1, kPanelWidth, 1)];
-    hLine.backgroundColor = kColorBorder;
-    [headerBG addSubview:hLine];
+    UILabel *logoLetter = [[UILabel alloc] initWithFrame:logo.bounds];
+    logoLetter.text = @"S";
+    logoLetter.textAlignment = NSTextAlignmentCenter;
+    logoLetter.textColor = SBText();
+    logoLetter.font = [UIFont systemFontOfSize:18.0f weight:UIFontWeightBlack];
+    [logo addSubview:logoLetter];
 
     _headerButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    _headerButton.frame = CGRectMake(0, 0, kPanelWidth - 44, kHeaderHeight);
+    _headerButton.frame = CGRectMake(58, 9, 214, 44);
     _headerButton.backgroundColor = [UIColor clearColor];
     [clip addSubview:_headerButton];
 
-    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, kPanelWidth - 95, kHeaderHeight)];
-    titleLabel.tag = 2002;
-    titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightBold];
-    titleLabel.textColor = kColorText;
-    titleLabel.textAlignment = NSTextAlignmentLeft;
-    [_headerButton addSubview:titleLabel];
+    _headerTitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 1, 214, 23)];
+    _headerTitleLabel.textColor = SBText();
+    _headerTitleLabel.font = [UIFont systemFontOfSize:15.0f weight:UIFontWeightBold];
+    [_headerButton addSubview:_headerTitleLabel];
 
-    CGFloat btnSize = 26.0f;
+    _headerSubtitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 23, 214, 15)];
+    _headerSubtitleLabel.text = @"STARBACKS  /  CONTROL DECK";
+    _headerSubtitleLabel.textColor = SBMuted();
+    _headerSubtitleLabel.font = [UIFont systemFontOfSize:8.0f weight:UIFontWeightSemibold];
+    _headerSubtitleLabel.adjustsFontSizeToFitWidth = YES;
+    [_headerButton addSubview:_headerSubtitleLabel];
+
+    _statusPill = [[UIView alloc] initWithFrame:CGRectMake(kPanelWidth - 128, 18, 72, 26)];
+    _statusPill.backgroundColor = SBColor(0.16f, 0.50f, 0.54f, 0.18f);
+    _statusPill.layer.cornerRadius = 13.0f;
+    _statusPill.layer.borderWidth = 1.0f;
+    _statusPill.layer.borderColor = SBAccentDim().CGColor;
+    [clip addSubview:_statusPill];
+
+    _statusDot = [[UIView alloc] initWithFrame:CGRectMake(10, 9, 7, 7)];
+    _statusDot.backgroundColor = SBAccent();
+    _statusDot.layer.cornerRadius = 3.5f;
+    _statusDot.layer.shadowColor = SBAccent().CGColor;
+    _statusDot.layer.shadowOpacity = 0.9f;
+    _statusDot.layer.shadowRadius = 4.0f;
+    [ _statusPill addSubview:_statusDot];
+
+    _statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(23, 0, 44, 26)];
+    _statusLabel.text = @"READY";
+    _statusLabel.textColor = SBAccent();
+    _statusLabel.font = [UIFont systemFontOfSize:9.0f weight:UIFontWeightBold];
+    [_statusPill addSubview:_statusLabel];
+
+    CGFloat btnSize = 28.0f;
     _closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    _closeButton.frame = CGRectMake(kPanelWidth - 36, (kHeaderHeight - btnSize) / 2.0f, btnSize, btnSize);
-    _closeButton.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.05f];
-    _closeButton.layer.cornerRadius = 6.0f;
+    _closeButton.frame = CGRectMake(kPanelWidth - 47, 17, btnSize, btnSize);
+    _closeButton.backgroundColor = SBColor(1.0f, 1.0f, 1.0f, 0.045f);
+    _closeButton.layer.cornerRadius = 9.0f;
     _closeButton.layer.borderWidth = 1.0f;
-    _closeButton.layer.borderColor = kColorBorder.CGColor;
-    UIImage *closeImg = [UIImage systemImageNamed:@"xmark"];
-    if (@available(iOS 13.0, *))
-        closeImg = [closeImg imageByApplyingSymbolConfiguration:
-                    [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIImageSymbolWeightBold]];
-    [_closeButton setImage:closeImg forState:UIControlStateNormal];
-    _closeButton.tintColor = kColorMuted;
+    _closeButton.layer.borderColor = SBBorder().CGColor;
+    if (@available(iOS 13.0, *)) {
+        UIImage *image = [UIImage systemImageNamed:@"xmark"];
+        image = [image imageByApplyingSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:10.0f weight:UIImageSymbolWeightBold]];
+        [_closeButton setImage:image forState:UIControlStateNormal];
+    }
+    _closeButton.tintColor = SBMuted();
     [clip addSubview:_closeButton];
+
+    UIView *line = [[UIView alloc] initWithFrame:CGRectMake(14, kHeaderHeight - 1, kPanelWidth - 28, 1)];
+    line.backgroundColor = SBBorder();
+    [clip addSubview:line];
 }
 
 - (void)setupTabBar {
     UIView *clip = [self clipContainer];
+    UIView *rail = [[UIView alloc] initWithFrame:CGRectMake(0, kHeaderHeight, kSideTabWidth, kPanelHeight - kHeaderHeight)];
+    rail.backgroundColor = SBColor(0.025f, 0.045f, 0.06f, 0.70f);
+    rail.tag = 8888;
+    [clip addSubview:rail];
 
-    CGFloat tabAreaY = kHeaderHeight;
-    CGFloat tabAreaH = kPanelHeight - kHeaderHeight;
+    UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(kSideTabWidth - 1, 13, 1, kPanelHeight - kHeaderHeight - 26)];
+    divider.backgroundColor = SBBorder();
+    [rail addSubview:divider];
 
-    UIView *tabBarBG = [[UIView alloc] initWithFrame:CGRectMake(0, tabAreaY, kSideTabWidth, tabAreaH)];
-    tabBarBG.backgroundColor = kColorTabInactive;
-    tabBarBG.tag = 8888;
-    [clip addSubview:tabBarBG];
-
-    UIView *vLine = [[UIView alloc] initWithFrame:CGRectMake(kSideTabWidth - 1, 8, 1, tabAreaH - 16)];
-    vLine.backgroundColor = kColorBorder;
-    [tabBarBG addSubview:vLine];
-
-    CGFloat topPad = 18.0f, gap = 10.0f;
-    CGFloat tabW = kSideTabWidth - 10.0f;
-    CGFloat tabH = 34.0f;
-
-    NSArray *tabTitles = @[ @"ESP", @"AIMBOT", @"MEMORY", @"INFO" ];
+    NSArray *titles = @[ @"OVERVIEW", @"AIM", @"SYSTEM", @"ABOUT" ];
+    NSArray *icons = @[ @"square.grid.2x2", @"scope", @"slider.horizontal.3", @"info.circle" ];
+    CGFloat top = 16.0f;
+    CGFloat tabH = 52.0f;
+    CGFloat gap = 5.0f;
 
     for (NSInteger i = 0; i < 4; i++) {
-        CGFloat ty = topPad + (CGFloat)i * (tabH + gap);
-        UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-        btn.frame = CGRectMake(5, ty, tabW, tabH);
-        btn.layer.cornerRadius = 6.0f;
-        btn.tag = i;
-        
-        BOOL active = (i == _currentTab);
-        btn.backgroundColor = active ? kColorAccent : [UIColor clearColor];
-        btn.layer.borderWidth = active ? 0 : 1;
-        btn.layer.borderColor = kColorBorder.CGColor;
-        
-        [btn setTitle:tabTitles[i] forState:UIControlStateNormal];
-        btn.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        [btn setTitleColor:active ? [UIColor whiteColor] : kColorMuted forState:UIControlStateNormal];
-        
-        btn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
-        btn.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
-        
-        [btn addTarget:self action:@selector(tabButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [tabBarBG addSubview:btn];
-        [_tabButtons addObject:btn];
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+        button.frame = CGRectMake(7, top + i * (tabH + gap), kSideTabWidth - 14, tabH);
+        button.tag = i;
+        button.layer.cornerRadius = 11.0f;
+        button.backgroundColor = i == _currentTab ? SBColor(0.16f, 0.48f, 0.53f, 0.34f) : [UIColor clearColor];
+        button.layer.borderWidth = i == _currentTab ? 1.0f : 0.0f;
+        button.layer.borderColor = SBAccentDim().CGColor;
+        [button setTitle:titles[i] forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont systemFontOfSize:8.0f weight:UIFontWeightBold];
+        [button setTitleColor:i == _currentTab ? SBText() : SBMuted() forState:UIControlStateNormal];
+        button.titleLabel.adjustsFontSizeToFitWidth = YES;
+        button.titleLabel.minimumScaleFactor = 0.65f;
+        button.titleEdgeInsets = UIEdgeInsetsMake(26, -24, 0, 0);
+        if (@available(iOS 13.0, *)) {
+            UIImage *icon = [UIImage systemImageNamed:icons[i]];
+            icon = [icon imageByApplyingSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16.0f weight:UIImageSymbolWeightMedium]];
+            [button setImage:icon forState:UIControlStateNormal];
+            button.tintColor = i == _currentTab ? SBAccent() : SBMuted();
+            button.imageEdgeInsets = UIEdgeInsetsMake(-11, 0, 15, 0);
+        }
+        [button addTarget:self action:@selector(tabButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [rail addSubview:button];
+        [_tabButtons addObject:button];
     }
 }
 
 - (void)setupContentArea {
     UIView *clip = [self clipContainer];
-
     CGFloat contentTop = kHeaderHeight;
     CGFloat contentHeight = kPanelHeight - contentTop;
     CGFloat contentLeft = kSideTabWidth;
     CGFloat contentWidth = kPanelWidth - contentLeft;
-    CGFloat scrollWidth = contentWidth - 10.0f;
+    CGFloat scrollWidth = contentWidth - 12.0f;
 
-    UIView *contentClipView = [[UIView alloc] initWithFrame:CGRectMake(contentLeft, contentTop,
-                                                                        contentWidth, contentHeight)];
-    contentClipView.backgroundColor = [UIColor clearColor];
-    contentClipView.clipsToBounds = YES;
-    contentClipView.tag = 4000;
-    [clip addSubview:contentClipView];
+    UIView *contentClip = [[UIView alloc] initWithFrame:CGRectMake(contentLeft, contentTop, contentWidth, contentHeight)];
+    contentClip.backgroundColor = [UIColor clearColor];
+    contentClip.clipsToBounds = YES;
+    contentClip.tag = 4000;
+    [clip addSubview:contentClip];
 
     _contentScrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, scrollWidth, contentHeight)];
     _contentScrollView.backgroundColor = [UIColor clearColor];
     _contentScrollView.showsVerticalScrollIndicator = NO;
     _contentScrollView.bounces = NO;
     _contentScrollView.scrollEnabled = NO;
-    [contentClipView addSubview:_contentScrollView];
+    [contentClip addSubview:_contentScrollView];
 
     _contentContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, scrollWidth, contentHeight)];
     _contentContainer.backgroundColor = [UIColor clearColor];
     [_contentScrollView addSubview:_contentContainer];
 
-    _scrollbarTrack = [[UIView alloc] initWithFrame:CGRectMake(contentWidth - kScrollBarWidth - 4, 6,
-                                                                kScrollBarWidth, contentHeight - 12)];
-    _scrollbarTrack.backgroundColor = kColorSliderTrack;
+    _scrollbarTrack = [[UIView alloc] initWithFrame:CGRectMake(contentWidth - kScrollBarWidth - 5, 8, kScrollBarWidth, contentHeight - 16)];
+    _scrollbarTrack.backgroundColor = SBColor(0.60f, 0.80f, 0.82f, 0.14f);
     _scrollbarTrack.layer.cornerRadius = kScrollBarWidth / 2.0f;
     _scrollbarTrack.tag = 5000;
-    [contentClipView addSubview:_scrollbarTrack];
+    [contentClip addSubview:_scrollbarTrack];
 
-    _scrollbarThumb = [[UIView alloc] initWithFrame:CGRectMake(contentWidth - kScrollBarWidth - 4, 6,
-                                                                kScrollBarWidth, 36.0f)];
-    _scrollbarThumb.backgroundColor = kColorSliderFill;
+    _scrollbarThumb = [[UIView alloc] initWithFrame:CGRectMake(contentWidth - kScrollBarWidth - 5, 8, kScrollBarWidth, 34.0f)];
+    _scrollbarThumb.backgroundColor = SBAccent();
     _scrollbarThumb.layer.cornerRadius = kScrollBarWidth / 2.0f;
     _scrollbarThumb.tag = 5001;
-    [contentClipView addSubview:_scrollbarThumb];
+    [contentClip addSubview:_scrollbarThumb];
 }
-
-// ... (Các hàm updateScrollbarLayout, updateHeaderForTab, logic check box, loadTabContent giữ nguyên 100% so với code cũ bạn đã gửi) ...
-// Lưu ý: Hàm makeCheckbox và buildCheckboxCell dùng kColorCheckOn, kColorText đã được định nghĩa ở trên.
 
 - (void)updateScrollbarLayout {
     CGFloat contentH = _contentScrollView.contentSize.height;
@@ -328,17 +341,14 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     }
     _scrollbarTrack.hidden = NO;
     _scrollbarThumb.hidden = NO;
-
     CGFloat maxOffset = contentH - viewH;
     CGFloat thumbH = viewH * (viewH / contentH);
-    if (thumbH < 28.0f) thumbH = 28.0f;
-    if (thumbH > viewH - 4.0f) thumbH = viewH - 4.0f;
-
+    thumbH = MAX(28.0f, MIN(viewH - 4.0f, thumbH));
     CGFloat range = viewH - thumbH;
     CGFloat offset = _contentScrollView.contentOffset.y;
-    CGFloat thumbY = (range > 0) ? (offset / maxOffset) * range : 0.0f;
+    CGFloat thumbY = range > 0 ? (offset / maxOffset) * range : 0.0f;
     thumbY = MAX(0, MIN(range, thumbY));
-    _scrollbarThumb.frame = CGRectMake(_scrollbarThumb.frame.origin.x, thumbY + 6, kScrollBarWidth, thumbH);
+    _scrollbarThumb.frame = CGRectMake(_scrollbarThumb.frame.origin.x, thumbY + 8, kScrollBarWidth, thumbH);
 }
 
 - (void)startScrollInertia {
@@ -355,46 +365,64 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 
 - (void)scrollInertiaStep {
     _scrollVelocity *= 0.92f;
-    if (ABS(_scrollVelocity) < 0.5f) { [self stopScrollInertia]; return; }
+    if (ABS(_scrollVelocity) < 0.5f) {
+        [self stopScrollInertia];
+        return;
+    }
     [self applyScrollDelta:_scrollVelocity];
 }
 
 - (void)applyScrollDelta:(CGFloat)delta {
     CGFloat contentH = _contentScrollView.contentSize.height;
     CGFloat viewH = _contentScrollView.bounds.size.height;
-    CGFloat maxOff = MAX(0, contentH - viewH);
-    CGFloat newOff = _contentScrollView.contentOffset.y + delta;
-    newOff = MAX(0, MIN(maxOff, newOff));
-    _contentScrollView.contentOffset = CGPointMake(0, newOff);
+    CGFloat maxOffset = MAX(0, contentH - viewH);
+    CGFloat offset = _contentScrollView.contentOffset.y + delta;
+    offset = MAX(0, MIN(maxOffset, offset));
+    _contentScrollView.contentOffset = CGPointMake(0, offset);
     [self updateScrollbarLayout];
 }
 
 - (void)updateHeaderForTab:(MenuTab)tab {
-    UILabel *lbl = (UILabel *)[_headerButton viewWithTag:2002];
-    switch (tab) {
-        case MenuTabESP: lbl.text = @"ESP Settings"; break;
-        case MenuTabAimbot: lbl.text = @"Aimbot Settings"; break;
-        case MenuTabMemory: lbl.text = @"Memory Functions"; break;
-        case MenuTabInfo: lbl.text = @"KTIEN IOS"; break;
-    }
+    NSArray *titles = @[ @"ESP OVERVIEW", @"AIM CONTROL", @"SYSTEM MEMORY", @"BUILD PROFILE" ];
+    NSArray *values = @[ @"Live visual telemetry", @"Precision targeting", @"Runtime preferences", @"Identity & version" ];
+    _headerTitleLabel.text = titles[tab];
+    _headerSubtitleLabel.text = [NSString stringWithFormat:@"STARBACKS  /  %@", values[tab]];
 }
 
 - (void)updateTabBarForTab:(MenuTab)tab {
+    NSArray *icons = @[ @"square.grid.2x2", @"scope", @"slider.horizontal.3", @"info.circle" ];
     for (NSInteger i = 0; i < (NSInteger)_tabButtons.count; i++) {
-        UIButton *btn = _tabButtons[i];
-        BOOL active = (i == tab);
-        btn.backgroundColor = active ? kColorAccent : [UIColor clearColor];
-        [btn setTitleColor:active ? [UIColor whiteColor] : kColorMuted forState:UIControlStateNormal];
-        btn.layer.borderWidth = active ? 0 : 1;
+        UIButton *button = _tabButtons[i];
+        BOOL active = i == tab;
+        button.backgroundColor = active ? SBColor(0.16f, 0.48f, 0.53f, 0.34f) : [UIColor clearColor];
+        button.layer.borderWidth = active ? 1.0f : 0.0f;
+        [button setTitleColor:active ? SBText() : SBMuted() forState:UIControlStateNormal];
+        if (@available(iOS 13.0, *)) {
+            UIImage *icon = [UIImage systemImageNamed:icons[i]];
+            icon = [icon imageByApplyingSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16.0f weight:UIImageSymbolWeightMedium]];
+            [button setImage:icon forState:UIControlStateNormal];
+            button.tintColor = active ? SBAccent() : SBMuted();
+        }
     }
+}
+
+- (UILabel *)sectionLabel:(NSString *)text y:(CGFloat)y width:(CGFloat)width {
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(12, y, width - 24, 17)];
+    label.text = text;
+    label.textColor = SBAccent();
+    label.font = [UIFont systemFontOfSize:9.0f weight:UIFontWeightBold];
+    label.text = [text uppercaseString];
+    label.alpha = 0.9f;
+    [_contentContainer addSubview:label];
+    return label;
 }
 
 - (UIView *)makeCheckboxWithKey:(NSString *)key checked:(BOOL)checked x:(CGFloat)x y:(CGFloat)y {
     UIView *box = [[UIView alloc] initWithFrame:CGRectMake(x, y, kCheckboxSize, kCheckboxSize)];
-    box.backgroundColor = checked ? kColorCheckOn : [UIColor clearColor];
-    box.layer.cornerRadius = 4.0f;
-    box.layer.borderWidth = 1.5f;
-    box.layer.borderColor = checked ? kColorCheckOn.CGColor : kColorCheckBorder.CGColor;
+    box.backgroundColor = checked ? SBAccentDim() : [UIColor clearColor];
+    box.layer.cornerRadius = 5.0f;
+    box.layer.borderWidth = 1.0f;
+    box.layer.borderColor = checked ? SBAccent().CGColor : SBColor(0.75f, 0.85f, 0.87f, 0.36f).CGColor;
     box.tag = checked ? 1 : 0;
     objc_setAssociatedObject(box, "key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(box, "isCheckbox", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -403,375 +431,294 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 }
 
 - (void)addCheckmarkTo:(UIView *)box {
-    UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(3, 3, kCheckboxSize-6, kCheckboxSize-6)];
-    UIImage *img = [UIImage systemImageNamed:@"checkmark"];
-    if (@available(iOS 13.0, *))
-        img = [img imageByApplyingSymbolConfiguration:
-               [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIImageSymbolWeightBold]];
-    iv.image = img; iv.tintColor = [UIColor whiteColor];
-    iv.contentMode = UIViewContentModeScaleAspectFit; iv.tag = 9999;
-    [box addSubview:iv];
+    if (@available(iOS 13.0, *)) {
+        UIImageView *imageView = [[UIImageView alloc] initWithFrame:CGRectMake(2, 2, kCheckboxSize - 4, kCheckboxSize - 4)];
+        imageView.image = [UIImage systemImageNamed:@"checkmark"];
+        imageView.tintColor = SBText();
+        imageView.contentMode = UIViewContentModeScaleAspectFit;
+        imageView.tag = 9999;
+        [box addSubview:imageView];
+    }
 }
 
 - (void)setCheckbox:(UIView *)box checked:(BOOL)checked {
     box.tag = checked ? 1 : 0;
-    box.backgroundColor = checked ? kColorCheckOn : [UIColor clearColor];
-    box.layer.borderColor = checked ? kColorCheckOn.CGColor : kColorCheckBorder.CGColor;
+    box.backgroundColor = checked ? SBAccentDim() : [UIColor clearColor];
+    box.layer.borderColor = checked ? SBAccent().CGColor : SBColor(0.75f, 0.85f, 0.87f, 0.36f).CGColor;
     [[box viewWithTag:9999] removeFromSuperview];
     if (checked) [self addCheckmarkTo:box];
 }
 
 - (UIView *)buildCheckboxCellWithTitle:(NSString *)title key:(NSString *)key frame:(CGRect)frame {
-    BOOL on = [[NSUserDefaults standardUserDefaults] boolForKey:key];
+    BOOL enabled = ESPPrefsBool(key, NO);
+    UIView *row = [[UIView alloc] initWithFrame:frame];
+    row.backgroundColor = SBCard();
+    row.layer.cornerRadius = 10.0f;
+    row.layer.borderWidth = 1.0f;
+    row.layer.borderColor = SBColor(0.56f, 0.75f, 0.78f, 0.10f).CGColor;
+    objc_setAssociatedObject(row, "key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    UIView *rv = [[UIView alloc] initWithFrame:frame];
-    rv.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.03f];
-    rv.layer.cornerRadius = 4.0f;
-    objc_setAssociatedObject(rv, "key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    
-    UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(0, frame.size.height - 1, frame.size.width, 1)];
-    sep.backgroundColor = kColorSeparator;
-    [rv addSubview:sep];
+    UIView *accent = [[UIView alloc] initWithFrame:CGRectMake(0, 8, 2, frame.size.height - 16)];
+    accent.backgroundColor = enabled ? SBAccent() : SBColor(0.55f, 0.75f, 0.78f, 0.18f);
+    accent.layer.cornerRadius = 1.0f;
+    accent.tag = 9111;
+    [row addSubview:accent];
 
-    CGFloat cbY = (frame.size.height - kCheckboxSize) / 2.0f;
-    CGFloat cbX = frame.size.width - kCheckboxSize - 2.0f;
-    UIView *cb = [self makeCheckboxWithKey:key checked:on x:cbX y:cbY];
-    [rv addSubview:cb];
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, frame.size.width - kCheckboxSize - 28, frame.size.height)];
+    label.text = title;
+    label.textColor = enabled ? SBText() : SBMuted();
+    label.font = [UIFont systemFontOfSize:11.0f weight:UIFontWeightSemibold];
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.72f;
+    [row addSubview:label];
 
-    UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, frame.size.width - kCheckboxSize - 16, frame.size.height)];
-    lbl.text = title;
-    lbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
-    lbl.textColor = kColorText;
-    lbl.adjustsFontSizeToFitWidth = YES;
-    lbl.minimumScaleFactor = 0.75f;
-    [rv addSubview:lbl];
-    return rv;
+    CGFloat checkboxY = (frame.size.height - kCheckboxSize) / 2.0f;
+    UIView *checkbox = [self makeCheckboxWithKey:key checked:enabled x:frame.size.width - kCheckboxSize - 11.0f y:checkboxY];
+    [row addSubview:checkbox];
+    return row;
+}
+
+- (UIView *)buildDangerCellWithTitle:(NSString *)title frame:(CGRect)frame {
+    UIView *row = [[UIView alloc] initWithFrame:frame];
+    row.backgroundColor = SBColor(0.35f, 0.08f, 0.10f, 0.34f);
+    row.layer.cornerRadius = 10.0f;
+    row.layer.borderWidth = 1.0f;
+    row.layer.borderColor = SBColor(1.0f, 0.28f, 0.32f, 0.32f).CGColor;
+    objc_setAssociatedObject(row, "key", @"__exit_hud__", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(13, 0, frame.size.width - 48, frame.size.height)];
+    label.text = title;
+    label.textColor = SBColor(1.0f, 0.50f, 0.52f, 1.0f);
+    label.font = [UIFont systemFontOfSize:11.0f weight:UIFontWeightBold];
+    [row addSubview:label];
+
+    if (@available(iOS 13.0, *)) {
+        UIImageView *icon = [[UIImageView alloc] initWithFrame:CGRectMake(frame.size.width - 31, 11, 18, 18)];
+        icon.image = [UIImage systemImageNamed:@"power"];
+        icon.tintColor = SBColor(1.0f, 0.50f, 0.52f, 1.0f);
+        icon.contentMode = UIViewContentModeScaleAspectFit;
+        [row addSubview:icon];
+    }
+    return row;
 }
 
 - (void)loadTabContent:(MenuTab)tab {
-    for (UIView *v in _contentContainer.subviews) {
-        [v removeFromSuperview];
-    }
-    
+    for (UIView *view in _contentContainer.subviews) [view removeFromSuperview];
     _contentScrollView.contentOffset = CGPointZero;
     [self stopScrollInertia];
     _scrollVelocity = 0;
 
     CGFloat contentWidth = _contentScrollView.bounds.size.width;
     _contentContainer.frame = CGRectMake(0, 0, contentWidth, _contentScrollView.bounds.size.height);
-    
-    __block CGFloat y = 8.0f;
+    __block CGFloat y = 14.0f;
+    CGFloat rowWidth = contentWidth - 24.0f;
+    CGFloat padX = 12.0f;
+    CGFloat gapX = 7.0f;
+    CGFloat colWidth = (rowWidth - gapX) / 2.0f;
 
-    // ===== TAB INFO =====
     if (tab == MenuTabInfo) {
-        CGFloat rowW = contentWidth - 14.0f;
-        CGFloat startX = 8.0f;
+        UILabel *eyebrow = [self sectionLabel:@"Starbacks identity" y:y width:contentWidth];
+        y += 24.0f;
+        UIView *hero = [[UIView alloc] initWithFrame:CGRectMake(padX, y, rowWidth, 66)];
+        hero.backgroundColor = SBCard();
+        hero.layer.cornerRadius = 13.0f;
+        hero.layer.borderWidth = 1.0f;
+        hero.layer.borderColor = SBBorder().CGColor;
+        [_contentContainer addSubview:hero];
 
-        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(startX, y, rowW, 26)];
-        title.text = @"FFExt Developer Information";
-        title.font = [UIFont systemFontOfSize:14 weight:UIFontWeightBold];
-        title.textColor = kColorText;
-        [_contentContainer addSubview:title];
-        y += 34;
+        UILabel *brand = [[UILabel alloc] initWithFrame:CGRectMake(15, 10, rowWidth - 30, 25)];
+        brand.text = @"STARBACKS / ELITE BUILD";
+        brand.textColor = SBText();
+        brand.font = [UIFont systemFontOfSize:15.0f weight:UIFontWeightBlack];
+        [hero addSubview:brand];
+        UILabel *tagline = [[UILabel alloc] initWithFrame:CGRectMake(15, 37, rowWidth - 30, 16)];
+        tagline.text = @"A focused control surface for a cleaner session.";
+        tagline.textColor = SBMuted();
+        tagline.font = [UIFont systemFontOfSize:10.0f weight:UIFontWeightMedium];
+        [hero addSubview:tagline];
+        y += 78.0f;
 
-        auto createRow = ^(NSString *label, NSString *value, CGFloat currentY) {
-            UIView *row = [[UIView alloc] initWithFrame:CGRectMake(startX, currentY, rowW, 24)];
-            row.backgroundColor = [UIColor clearColor];
-            
-            UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, rowW * 0.40, 24)];
-            lbl.text = [NSString stringWithFormat:@"%@:", label];
-            lbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
-            lbl.textColor = kColorMuted;
-            [row addSubview:lbl];
-            
-            UILabel *val = [[UILabel alloc] initWithFrame:CGRectMake(rowW * 0.40, 0, rowW * 0.60, 24)];
-            val.text = value;
-            val.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
-            val.textColor = kColorText;
-            val.textAlignment = NSTextAlignmentRight;
-            val.adjustsFontSizeToFitWidth = YES;
-            val.minimumScaleFactor = 0.75f;
-            [row addSubview:val];
-            
+        [self sectionLabel:@"Build details" y:y width:contentWidth];
+        y += 22.0f;
+        NSArray *details = @[
+            @[ @"GAME", @"Garena Free Fire" ],
+            @[ @"GAME VERSION", @"1.126.1" ],
+            @[ @"MENU BUILD", @"v2.0.2" ],
+            @[ @"PROFILE", @"Premium HUD" ],
+            @[ @"STATUS", @"Verified session" ],
+            @[ @"CHANNEL", @"Starbacks" ]
+        ];
+        for (NSArray *detail in details) {
+            UIView *row = [[UIView alloc] initWithFrame:CGRectMake(padX, y, rowWidth, 26)];
+            UILabel *left = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, rowWidth * 0.42f, 26)];
+            left.text = detail[0];
+            left.textColor = SBMuted();
+            left.font = [UIFont systemFontOfSize:9.0f weight:UIFontWeightBold];
+            [row addSubview:left];
+            UILabel *right = [[UILabel alloc] initWithFrame:CGRectMake(rowWidth * 0.42f, 0, rowWidth * 0.58f - 10, 26)];
+            right.text = detail[1];
+            right.textColor = SBText();
+            right.font = [UIFont systemFontOfSize:10.0f weight:UIFontWeightSemibold];
+            right.textAlignment = NSTextAlignmentRight;
+            [row addSubview:right];
             [_contentContainer addSubview:row];
-            return currentY + 28;
-        };
-        
-        y = createRow(@"Tên Game", @"Garena Free Fire", y);
-        y = createRow(@"Vison Game", @"1.126.1", y);
-        y = createRow(@"Vison FFExt", @"v2.0.2", y);
-        
-        y += 8;
-        UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(startX, y, rowW, 1)];
-        sep.backgroundColor = kColorSeparator;
-        [_contentContainer addSubview:sep];
-        y += 14;
-        
-        UILabel *devTitle = [[UILabel alloc] initWithFrame:CGRectMake(startX, y, rowW, 20)];
-        devTitle.text = @"DEVELOPER INFO";
-        devTitle.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-        devTitle.textColor = kColorAccent;
-        [_contentContainer addSubview:devTitle];
-        y += 24;
-
-        y = createRow(@"Admin Support", @"Telegram : @ktienxios", y);
-        y = createRow(@"Product", @"TIPA FFExternal KTIEN IOS", y);
-        
-        UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(startX, y + 12, rowW, 16)];
-        foot.text = @"Build v2.0.2 — Starbacks HUD";
-        foot.font = [UIFont italicSystemFontOfSize:10];
-        foot.textColor = kColorMuted;
-        foot.textAlignment = NSTextAlignmentCenter;
-        [_contentContainer addSubview:foot];
-        y += 32;
-
+            y += 27.0f;
+        }
         [self finalizeContentHeight:y contentWidth:contentWidth];
         return;
     }
 
-    // ===== TAB MEMORY =====
     if (tab == MenuTabMemory) {
+        [self sectionLabel:@"Runtime functions" y:y width:contentWidth];
+        y += 23.0f;
         NSArray *rows = @[
-            @[ @"MEMORY FUNCTIONS", @"__section__" ],
             @[ @"No ReLoad", @"NoReLoad" ],
-            @[ @"Vô Hạn Đạn", @"VohaDan" ],
-            @[ @"Cam Cao", @"camcao" ], 
+            @[ @"Infinite Ammo", @"VohaDan" ],
+            @[ @"High Camera", @"camcao" ]
         ];
-
-        CGFloat padX = 10.0f, gapX = 6.0f;
-        CGFloat colW = (contentWidth - padX * 2.0f - gapX) / 2.0f;
-
-        NSMutableArray *pending = [NSMutableArray array];
-
-        auto flushPending = ^{
-            for (NSUInteger i = 0; i < pending.count; i += 2) {
-                NSArray *L = pending[i];
-                NSArray *R = (i + 1 < pending.count) ? pending[i + 1] : nil;
-                CGRect lf = CGRectMake(padX, y, colW, kRowHeight);
-                [_contentContainer addSubview:[self buildCheckboxCellWithTitle:L[0] key:L[1] frame:lf]];
-                if (R) {
-                    CGRect rf = CGRectMake(padX + colW + gapX, y, colW, kRowHeight);
-                    [_contentContainer addSubview:[self buildCheckboxCellWithTitle:R[0] key:R[1] frame:rf]];
-                }
-                y += kRowHeight;
+        for (NSUInteger i = 0; i < rows.count; i += 2) {
+            NSArray *left = rows[i];
+            [_contentContainer addSubview:[self buildCheckboxCellWithTitle:left[0] key:left[1] frame:CGRectMake(padX, y, colWidth, kRowHeight)]];
+            if (i + 1 < rows.count) {
+                NSArray *right = rows[i + 1];
+                [_contentContainer addSubview:[self buildCheckboxCellWithTitle:right[0] key:right[1] frame:CGRectMake(padX + colWidth + gapX, y, colWidth, kRowHeight)]];
             }
-            [pending removeAllObjects];
-        };
-
-        for (NSArray *row in rows) {
-            NSString *title = row[0];
-            NSString *key = row[1];
-
-            if ([key isEqualToString:@"__section__"]) {
-                flushPending();
-                UILabel *sec = [[UILabel alloc] initWithFrame:CGRectMake(10, y + 6, contentWidth - 20, 16)];
-                sec.text = title;
-                sec.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-                sec.textColor = kColorMuted;
-                [_contentContainer addSubview:sec];
-                y += 26.0f;
-                continue;
-            }
-            [pending addObject:row];
+            y += kRowHeight + 7.0f;
         }
-        flushPending();
-
-        y += 4;
-        CGFloat rowW = contentWidth - 20.0f;
-        y = [self addSliderRow:@"Tỷ lệ Cam Cao"
-                        format:@"Cam Cao  —  %.0f"
-                           key:@"Campc" def:1.0f min:1 max:100
-                      labelTag:7001 sliderTag:7002 y:y width:rowW];
-
+        y += 8.0f;
+        [self sectionLabel:@"Camera calibration" y:y width:contentWidth];
+        y += 23.0f;
+        y = [self addSliderRow:@"Camera height" format:@"CAMERA HEIGHT  /  %.0f" key:@"Campc" def:1.0f min:1 max:100 labelTag:7001 sliderTag:7002 y:y width:rowWidth];
         [self finalizeContentHeight:y contentWidth:contentWidth];
         return;
     }
 
-    // ===== TAB ESP & AIMBOT =====
-    NSArray *rows = nil;
+    NSArray *rows = tab == MenuTabESP ? @[
+        @[ @"2D Box", @"Box" ],
+        @[ @"Corner Box", @"box" ],
+        @[ @"Health Bar", @"Health" ],
+        @[ @"Enemy Count", @"Count" ],
+        @[ @"Show Name", @"Name" ],
+        @[ @"Bone Work", @"Bone" ],
+        @[ @"Show Distance", @"Dis" ],
+        @[ @"Radar Line", @"Line" ],
+        @[ @"FOV Circle", @"ShowFov" ]
+    ] : @[
+        @[ @"Auto Aimbot", @"Aimbot" ],
+        @[ @"Silent Aim", @"SilentAim" ],
+        @[ @"Ignore Bot", @"AimIgnoreBot" ],
+        @[ @"Ignore Knocked", @"AimIgnoreKnock" ],
+        @[ @"Visible Check", @"AimCheckVisible" ]
+    ];
+
+    [self sectionLabel:(tab == MenuTabESP ? @"Visual telemetry" : @"Core targeting") y:y width:contentWidth];
+    y += 23.0f;
+    for (NSUInteger i = 0; i < rows.count; i += 2) {
+        NSArray *left = rows[i];
+        [_contentContainer addSubview:[self buildCheckboxCellWithTitle:left[0] key:left[1] frame:CGRectMake(padX, y, colWidth, kRowHeight)]];
+        if (i + 1 < rows.count) {
+            NSArray *right = rows[i + 1];
+            [_contentContainer addSubview:[self buildCheckboxCellWithTitle:right[0] key:right[1] frame:CGRectMake(padX + colWidth + gapX, y, colWidth, kRowHeight)]];
+        }
+        y += kRowHeight + 7.0f;
+    }
+
+    y += 8.0f;
     if (tab == MenuTabESP) {
-        rows = @[
-            @[ @"ESP FUNCTION", @"__section__" ],
-            @[ @"2D Box", @"Box" ],
-            @[ @"Corner Box", @"box" ],
-            @[ @"Health Bar", @"Health" ],
-            @[ @"Enemy Count", @"Count" ],
-            @[ @"Show Name", @"Name" ],
-            @[ @"Bone Work", @"Bone" ],
-            @[ @"Show Distance", @"Dis" ], 
-            @[ @"Radar Line", @"Line" ],
-            @[ @"Show FOV Circle", @"ShowFov" ],
-            @[ @"OTHER PREFS", @"__section__" ],
-            @[ @"ESP Real Bot", (NSString *)NSSENCRYPT("EspBot") ],
-            @[ @"Exit HUD", @"__exit_hud__" ],
+        [self sectionLabel:@"Advanced visual layer" y:y width:contentWidth];
+        y += 23.0f;
+        NSArray *advanced = @[
+            @[ @"Real Bot Filter", (NSString *)NSSENCRYPT("EspBot") ]
         ];
+        for (NSArray *item in advanced) {
+            [_contentContainer addSubview:[self buildCheckboxCellWithTitle:item[0] key:item[1] frame:CGRectMake(padX, y, rowWidth, kRowHeight)]];
+            y += kRowHeight + 7.0f;
+        }
+        [_contentContainer addSubview:[self buildDangerCellWithTitle:@"Close Starbacks HUD" frame:CGRectMake(padX, y, rowWidth, kRowHeight)]];
+        y += kRowHeight + 7.0f;
     } else {
-        rows = @[
-            @[ @"AIMBOT SETTINGS", @"__section__" ],
-            @[ @"Auto Aimbot", @"Aimbot" ],
-            @[ @"Silent Aim", @"SilentAim" ],
-            @[ @"Ignore Bot", @"AimIgnoreBot" ],
-            @[ @"Ignore Knocked", @"AimIgnoreKnock" ],
-            @[ @"Aim Line Speed", @"AimCheckVisible" ],
-            @[ @"HUD AUX BUTTON", @"__section__" ],
-            @[ @"Float AIM Btn", (NSString *)NSSENCRYPT("FloatAimBtn") ],
-        ];
+        [self sectionLabel:@"Aim behaviour" y:y width:contentWidth];
+        y += 23.0f;
+        y = [self addSegmentedRow:@"Trigger mode" key:@"TriggerMode" y:y width:rowWidth];
+        y = [self addSegmentedRow:@"Target lock" key:@"AimPos" y:y width:rowWidth];
+        y = [self addSegmentedRow:@"Target priority" key:@"AimTargetMode" y:y width:rowWidth];
+        y += 6.0f;
+        [self sectionLabel:@"Precision envelope" y:y width:contentWidth];
+        y += 23.0f;
+        y = [self addSliderRow:@"FOV radius" format:@"AIM FOV  /  %.0f PX" key:@"Fov" def:150.0f min:10 max:500 labelTag:6001 sliderTag:6002 y:y width:rowWidth];
+        y = [self addSliderRow:@"Max distance" format:@"AIM DISTANCE  /  %.0f M" key:@"Distance" def:200.0f min:1 max:400 labelTag:6003 sliderTag:6004 y:y width:rowWidth];
+        y = [self addSliderRow:@"Lock speed" format:@"AIM SPEED  /  %.0f%%" key:@"AimSpeed" def:100.0f min:1 max:100 labelTag:6005 sliderTag:6006 y:y width:rowWidth];
+        y += 4.0f;
+        [_contentContainer addSubview:[self buildCheckboxCellWithTitle:@"Floating Aim Button" key:(NSString *)NSSENCRYPT("FloatAimBtn") frame:CGRectMake(padX, y, rowWidth, kRowHeight)]];
+        y += kRowHeight + 7.0f;
     }
-
-    CGFloat padX = 10.0f, gapX = 6.0f;
-    CGFloat colW = (contentWidth - padX * 2.0f - gapX) / 2.0f;
-
-    NSMutableArray *pending = [NSMutableArray array];
-
-    auto flushPending = ^{
-        for (NSUInteger i = 0; i < pending.count; i += 2) {
-            NSArray *L = pending[i];
-            NSArray *R = (i + 1 < pending.count) ? pending[i + 1] : nil;
-            CGRect lf = CGRectMake(padX, y, colW, kRowHeight);
-            [_contentContainer addSubview:[self buildCheckboxCellWithTitle:L[0] key:L[1] frame:lf]];
-            if (R) {
-                CGRect rf = CGRectMake(padX + colW + gapX, y, colW, kRowHeight);
-                [_contentContainer addSubview:[self buildCheckboxCellWithTitle:R[0] key:R[1] frame:rf]];
-            }
-            y += kRowHeight;
-        }
-        [pending removeAllObjects];
-    };
-
-    for (NSArray *row in rows) {
-        NSString *title = row[0];
-        NSString *key = row[1];
-
-        if ([key isEqualToString:@"__section__"]) {
-            flushPending();
-            UILabel *sec = [[UILabel alloc] initWithFrame:CGRectMake(10, y + 6, contentWidth - 20, 16)];
-            sec.text = title;
-            sec.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-            sec.textColor = kColorMuted;
-            [_contentContainer addSubview:sec];
-            y += 26.0f;
-            continue;
-        }
-
-        if ([key isEqualToString:@"__exit_hud__"]) {
-            flushPending();
-            CGFloat rowW = contentWidth - 20.0f;
-
-            UIView *rv = [[UIView alloc] initWithFrame:CGRectMake(10, y, rowW, kRowHeight)];
-            rv.backgroundColor = kColorDangerBG;
-            rv.layer.cornerRadius = 6.0f;
-            rv.layer.borderWidth = 1.0f;
-            rv.layer.borderColor = [UIColor colorWithRed:1.0f green:0.3f blue:0.3f alpha:0.4f].CGColor;
-
-            objc_setAssociatedObject(rv, "key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-            UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, rowW - 12, kRowHeight)];
-            lbl.text = title;
-            lbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
-            lbl.textColor = kColorDanger;
-
-            [rv addSubview:lbl];
-            [_contentContainer addSubview:rv];
-
-            y += kRowHeight + 4.0f;
-            continue;
-        }
-
-        [pending addObject:row];
-    }
-    flushPending();
-
-    if (tab == MenuTabAimbot) {
-        y += 6;
-        CGFloat rowW = contentWidth - 20.0f;
-
-        UILabel *sec1 = [[UILabel alloc] initWithFrame:CGRectMake(10, y + 3, rowW, 16)];
-        sec1.text = @"CRITICAL CONFIGS";
-        sec1.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-        sec1.textColor = kColorMuted;
-        [_contentContainer addSubview:sec1]; y += 24;
-
-        y = [self addSegmentedRow:@"Trigger Mode" key:@"TriggerMode" y:y width:rowW];
-        y = [self addSegmentedRow:@"Aim Target Lock" key:@"AimPos" y:y width:rowW];
-        y = [self addSegmentedRow:@"Aim Target Mode" key:@"AimTargetMode" y:y width:rowW];
-        y += 6;
-
-        UILabel *sec2 = [[UILabel alloc] initWithFrame:CGRectMake(10, y + 3, rowW, 16)];
-        sec2.text = @"GEOMETRIC PARAMETERS";
-        sec2.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-        sec2.textColor = kColorMuted;
-        [_contentContainer addSubview:sec2]; y += 24;
-
-        y = [self addSliderRow:@"Aim FOV Radius"
-                        format:@"Aim FOV  —  %.0f px"
-                           key:@"Fov" def:150.0f min:10 max:500
-                      labelTag:6001 sliderTag:6002 y:y width:rowW];
-        y = [self addSliderRow:@"Aim Max Distance"
-                        format:@"Aim Distance  —  %.0f m"
-                           key:@"Distance" def:200.0f min:1 max:400
-                      labelTag:6003 sliderTag:6004 y:y width:rowW];
-        y = [self addSliderRow:@"Aim Lock Speed"
-                        format:@"Aim Speed  —  %.0f%%"
-                           key:@"AimSpeed" def:100.0f min:1 max:100
-                      labelTag:6005 sliderTag:6006 y:y width:rowW];
-    }
-
     [self finalizeContentHeight:y contentWidth:contentWidth];
 }
 
-- (void)finalizeContentHeight:(CGFloat)y contentWidth:(CGFloat)cw {
-    _contentContainer.frame = CGRectMake(0, 0, cw, y + 8);
+- (void)finalizeContentHeight:(CGFloat)y contentWidth:(CGFloat)width {
+    _contentContainer.frame = CGRectMake(0, 0, width, y + 12.0f);
     _contentScrollView.contentSize = _contentContainer.frame.size;
     [self updateScrollbarLayout];
 }
 
-- (CGFloat)addSliderRow:(NSString *)name format:(NSString *)fmt key:(NSString *)key
-                    def:(CGFloat)def min:(float)minV max:(float)maxV
-               labelTag:(NSInteger)ltag sliderTag:(NSInteger)stag
-                      y:(CGFloat)y width:(CGFloat)rowW {
-    CGFloat val = ESPPrefsFloat(key, def);
-    if (val < minV || val > maxV) val = def;
+- (CGFloat)addSliderRow:(NSString *)name format:(NSString *)format key:(NSString *)key def:(CGFloat)def min:(float)minValue max:(float)maxValue labelTag:(NSInteger)labelTag sliderTag:(NSInteger)sliderTag y:(CGFloat)y width:(CGFloat)rowWidth {
+    CGFloat value = ESPPrefsFloat(key, def);
+    if (value < minValue || value > maxValue) value = def;
 
-    UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(10, y, rowW, 16)];
-    lbl.text = [NSString stringWithFormat:fmt, val];
-    lbl.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-    lbl.textColor = kColorText; lbl.tag = ltag;
-    [_contentContainer addSubview:lbl]; y += 18;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(10, y, rowWidth - 20, 51)];
+    card.backgroundColor = SBCard();
+    card.layer.cornerRadius = 10.0f;
+    card.layer.borderWidth = 1.0f;
+    card.layer.borderColor = SBColor(0.56f, 0.75f, 0.78f, 0.10f).CGColor;
+    [_contentContainer addSubview:card];
 
-    UISlider *sl = [[UISlider alloc] initWithFrame:CGRectMake(10, y, rowW, 24)];
-    sl.minimumValue = minV; sl.maximumValue = maxV; sl.value = (float)val;
-    sl.minimumTrackTintColor = kColorSliderFill;
-    sl.maximumTrackTintColor = kColorSliderTrack;
-    if (@available(iOS 13.0, *)) {
-        sl.thumbTintColor = [UIColor whiteColor];
-    } else {
-        sl.thumbTintColor = kColorSliderFill;
-    }
-    sl.tag = stag;
-    objc_setAssociatedObject(sl, "key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(sl, "label", lbl, OBJC_ASSOCIATION_ASSIGN);
-    objc_setAssociatedObject(sl, "fmt", fmt, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [sl addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
-    [_contentContainer addSubview:sl]; y += 28;
-    return y;
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(11, 4, rowWidth - 42, 17)];
+    label.text = [NSString stringWithFormat:format, value];
+    label.textColor = SBText();
+    label.font = [UIFont systemFontOfSize:9.0f weight:UIFontWeightBold];
+    label.tag = labelTag;
+    [card addSubview:label];
+
+    UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(8, 22, rowWidth - 36, 24)];
+    slider.minimumValue = minValue;
+    slider.maximumValue = maxValue;
+    slider.value = value;
+    slider.minimumTrackTintColor = SBAccent();
+    slider.maximumTrackTintColor = SBColor(0.65f, 0.80f, 0.82f, 0.18f);
+    if (@available(iOS 13.0, *)) slider.thumbTintColor = SBText();
+    else slider.thumbTintColor = SBAccent();
+    slider.tag = sliderTag;
+    objc_setAssociatedObject(slider, "key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(slider, "label", label, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(slider, "fmt", format, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+    [card addSubview:slider];
+    return y + 58.0f;
 }
 
 - (void)checkboxTappedWithView:(UIView *)box {
     NSString *key = objc_getAssociatedObject(box, "key");
     if (!key) return;
-    BOOL newVal = (box.tag == 0);
-    [self setCheckbox:box checked:newVal];
-    ESPPrefsSetBool(key, newVal);
-    [[NSUserDefaults standardUserDefaults] setBool:newVal forKey:key];
+    BOOL enabled = box.tag == 0;
+    [self setCheckbox:box checked:enabled];
+    UIView *row = box.superview;
+    UILabel *label = nil;
+    for (UIView *subview in row.subviews) if ([subview isKindOfClass:[UILabel class]]) label = (UILabel *)subview;
+    label.textColor = enabled ? SBText() : SBMuted();
+    UIView *accent = [row viewWithTag:9111];
+    accent.backgroundColor = enabled ? SBAccent() : SBColor(0.55f, 0.75f, 0.78f, 0.18f);
+    ESPPrefsSetBool(key, enabled);
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:key];
     [[NSUserDefaults standardUserDefaults] synchronize];
     ESPSyncFromPrefs();
     [self notifyMenuView];
 }
 
 - (void)notifyMenuView {
-    for (UIView *v = self.view.superview; v; v = v.superview) {
-        if ([v isKindOfClass:[MenuView class]]) {
-            [(MenuView *)v reloadFloatingAuxButtonsFromPrefs]; break;
+    for (UIView *view = self.view.superview; view; view = view.superview) {
+        if ([view isKindOfClass:[MenuView class]]) {
+            [(MenuView *)view reloadFloatingAuxButtonsFromPrefs];
+            break;
         }
     }
 }
@@ -779,14 +726,14 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 - (void)sliderChanged:(UISlider *)sender {
     NSString *key = objc_getAssociatedObject(sender, "key");
     if (!key) return;
-    float val = sender.value;
-    ESPPrefsSetFloat(key, val);
-    [[NSUserDefaults standardUserDefaults] setFloat:val forKey:key];
+    float value = sender.value;
+    ESPPrefsSetFloat(key, value);
+    [[NSUserDefaults standardUserDefaults] setFloat:value forKey:key];
     [[NSUserDefaults standardUserDefaults] synchronize];
     ESPSyncFromPrefs();
-    UILabel *lbl = objc_getAssociatedObject(sender, "label");
-    NSString *fmt = objc_getAssociatedObject(sender, "fmt");
-    if (lbl && fmt) lbl.text = [NSString stringWithFormat:fmt, val];
+    UILabel *label = objc_getAssociatedObject(sender, "label");
+    NSString *format = objc_getAssociatedObject(sender, "fmt");
+    if (label && format) label.text = [NSString stringWithFormat:format, value];
 }
 
 - (NSArray<NSString *> *)comboOptionsForKey:(NSString *)key {
@@ -797,95 +744,86 @@ typedef NS_ENUM(NSInteger, MenuTab) {
     return @[];
 }
 
-- (void)updateSegmentedRowVisual:(UIView *)row selectedIndex:(int)sel {
+- (void)updateSegmentedRowVisual:(UIView *)row selectedIndex:(int)selectedIndex {
     NSArray<UIView *> *cells = objc_getAssociatedObject(row, "segCells");
     for (NSInteger i = 0; i < (NSInteger)cells.count; i++) {
         UIView *cell = cells[i];
-        UILabel *lab = [cell viewWithTag:kSegmentLabelTag];
-        if (i == sel) {
-            cell.backgroundColor = kColorSegActive;
-            if (lab) {
-                lab.textColor = [UIColor whiteColor];
-                lab.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-            }
-        } else {
-            cell.backgroundColor = [UIColor clearColor];
-            if (lab) {
-                lab.textColor = kColorMuted;
-                lab.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
-            }
+        UILabel *label = [cell viewWithTag:kSegmentLabelTag];
+        BOOL selected = i == selectedIndex;
+        cell.backgroundColor = selected ? SBAccentDim() : [UIColor clearColor];
+        if (label) {
+            label.textColor = selected ? SBText() : SBMuted();
+            label.font = [UIFont systemFontOfSize:9.0f weight:selected ? UIFontWeightBold : UIFontWeightMedium];
         }
     }
 }
 
-- (CGFloat)addSegmentedRow:(NSString *)title key:(NSString *)key y:(CGFloat)y width:(CGFloat)rowW {
-    NSArray<NSString *> *opts = [self comboOptionsForKey:key];
-    if (!opts.count) return y;
+- (CGFloat)addSegmentedRow:(NSString *)title key:(NSString *)key y:(CGFloat)y width:(CGFloat)rowWidth {
+    NSArray<NSString *> *options = [self comboOptionsForKey:key];
+    if (!options.count) return y;
+    const CGFloat titleHeight = 16.0f;
+    const CGFloat pillHeight = 29.0f;
+    const CGFloat gap = 4.0f;
+    const CGFloat bottom = 6.0f;
+    CGFloat rowHeight = titleHeight + gap + pillHeight + bottom;
 
-    const CGFloat titleH = 16, pillH = 26, vGap = 4, botPad = 5;
-    CGFloat rowH = titleH + vGap + pillH + botPad;
-
-    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(10, y, rowW, rowH)];
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(10, y, rowWidth - 20, rowHeight)];
     row.backgroundColor = [UIColor clearColor];
     objc_setAssociatedObject(row, "segComboPrefsKey", key, OBJC_ASSOCIATION_COPY_NONATOMIC);
 
-    UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, rowW, titleH)];
-    tl.text = title;
-    tl.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-    tl.textColor = kColorMuted;
-    [row addSubview:tl];
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, rowWidth - 20, titleHeight)];
+    titleLabel.text = title.uppercaseString;
+    titleLabel.textColor = SBMuted();
+    titleLabel.font = [UIFont systemFontOfSize:9.0f weight:UIFontWeightBold];
+    [row addSubview:titleLabel];
 
-    UIView *track = [[UIView alloc] initWithFrame:CGRectMake(0, titleH + vGap, rowW, pillH)];
+    UIView *track = [[UIView alloc] initWithFrame:CGRectMake(0, titleHeight + gap, rowWidth - 20, pillHeight)];
     track.tag = kSegmentTrackTag;
-    track.backgroundColor = kColorSegBG;
-    track.layer.cornerRadius = 6;
-    track.layer.borderWidth = 1;
-    track.layer.borderColor = kColorBorder.CGColor;
+    track.backgroundColor = SBCard();
+    track.layer.cornerRadius = 9.0f;
+    track.layer.borderWidth = 1.0f;
+    track.layer.borderColor = SBBorder().CGColor;
     track.clipsToBounds = YES;
     [row addSubview:track];
 
-    int sel = (int)ESPPrefsFloat(key, 0);
-    if (sel < 0 || sel >= (int)opts.count) sel = 0;
-
-    CGFloat segW = rowW / (CGFloat)opts.count;
+    int selected = (int)ESPPrefsFloat(key, 0.0f);
+    if (selected < 0 || selected >= (int)options.count) selected = 0;
+    CGFloat segmentWidth = track.bounds.size.width / (CGFloat)options.count;
     NSMutableArray *cells = [NSMutableArray array];
-    for (NSInteger i = 0; i < (NSInteger)opts.count; i++) {
-        UIView *cell = [[UIView alloc] initWithFrame:CGRectMake(segW*i+2, 2, segW-4, pillH-4)];
-        cell.layer.cornerRadius = 4;
+    for (NSInteger i = 0; i < (NSInteger)options.count; i++) {
+        UIView *cell = [[UIView alloc] initWithFrame:CGRectMake(segmentWidth * i + 2, 2, segmentWidth - 4, pillHeight - 4)];
+        cell.layer.cornerRadius = 7.0f;
         cell.userInteractionEnabled = NO;
-        UILabel *lab = [[UILabel alloc] initWithFrame:cell.bounds];
-        lab.tag = kSegmentLabelTag; lab.text = opts[i];
-        lab.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
-        lab.textAlignment = NSTextAlignmentCenter;
-        lab.textColor = kColorMuted;
-        lab.adjustsFontSizeToFitWidth = YES;
-        lab.minimumScaleFactor = 0.65;
-        [cell addSubview:lab]; [track addSubview:cell]; [cells addObject:cell];
+        UILabel *label = [[UILabel alloc] initWithFrame:cell.bounds];
+        label.tag = kSegmentLabelTag;
+        label.text = options[i];
+        label.textAlignment = NSTextAlignmentCenter;
+        label.adjustsFontSizeToFitWidth = YES;
+        label.minimumScaleFactor = 0.62f;
+        [cell addSubview:label];
+        [track addSubview:cell];
+        [cells addObject:cell];
     }
     objc_setAssociatedObject(row, "segCells", cells, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [self updateSegmentedRowVisual:row selectedIndex:sel];
+    [self updateSegmentedRowVisual:row selectedIndex:selected];
     [_contentContainer addSubview:row];
-    return y + rowH + 4;
+    return y + rowHeight + 5.0f;
 }
 
-- (void)applySegmentedSelectionForRow:(UIView *)row touchInContent:(CGPoint)pt {
+- (void)applySegmentedSelectionForRow:(UIView *)row touchInContent:(CGPoint)point {
     NSString *key = objc_getAssociatedObject(row, "segComboPrefsKey");
     NSArray *cells = objc_getAssociatedObject(row, "segCells");
     UIView *track = [row viewWithTag:kSegmentTrackTag];
     if (!key || !track || !cells.count) return;
-
-    CGPoint inRow = CGPointMake(pt.x - row.frame.origin.x, pt.y - row.frame.origin.y);
+    CGPoint inRow = CGPointMake(point.x - row.frame.origin.x, point.y - row.frame.origin.y);
     if (!CGRectContainsPoint(track.frame, inRow)) return;
-
-    CGFloat relX = inRow.x - track.frame.origin.x;
-    NSInteger n = (NSInteger)cells.count;
-    CGFloat w = track.bounds.size.width;
-    NSInteger idx = (NSInteger)(relX / (w / (CGFloat)n));
-    idx = MAX(0, MIN(n - 1, idx));
-
-    ESPPrefsSetFloat(key, (float)idx);
+    CGFloat relativeX = inRow.x - track.frame.origin.x;
+    NSInteger count = (NSInteger)cells.count;
+    NSInteger index = (NSInteger)(relativeX / (track.bounds.size.width / (CGFloat)count));
+    index = MAX(0, MIN(count - 1, index));
+    ESPPrefsSetFloat(key, (float)index);
     ESPSyncFromPrefs();
-    [self updateSegmentedRowVisual:row selectedIndex:(int)idx];
+    [self updateSegmentedRowVisual:row selectedIndex:(int)index];
     [self notifyMenuView];
 }
 
@@ -906,34 +844,36 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 }
 
 - (void)handleOutsideTap:(UITapGestureRecognizer *)tap {
-    CGPoint p = [tap locationInView:self.view];
-    if (!CGRectContainsPoint(_floatingPanel.frame, p)) [self closeTapped];
+    CGPoint point = [tap locationInView:self.view];
+    if (!CGRectContainsPoint(_floatingPanel.frame, point)) [self closeTapped];
 }
 
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gr shouldReceiveTouch:(UITouch *)touch {
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
     return !CGRectContainsPoint(_floatingPanel.frame, [touch locationInView:self.view]);
 }
 
 - (BOOL)handleTouchAtViewPoint:(CGPoint)point phase:(NSInteger)phase pointerId:(NSInteger)pointerId {
     BOOL insidePanel = CGRectContainsPoint(_floatingPanel.frame, point);
-    UITouchPhase ph = (UITouchPhase)phase;
+    UITouchPhase touchPhase = (UITouchPhase)phase;
 
-    if (ph == UITouchPhaseBegan) {
+    if (touchPhase == UITouchPhaseBegan) {
         if (!insidePanel) return NO;
         if (_trackingPointerId != -1 && _trackingPointerId != pointerId) return NO;
-
         _trackingPointerId = pointerId;
-        _touchOnClose = _touchOnExitHUD = _menuDragging = NO;
-        _activeCheckbox = nil; _segmentedRowTracking = nil; _sliderTracking = nil;
+        _touchOnClose = NO;
+        _touchOnExitHUD = NO;
+        _menuDragging = NO;
+        _activeCheckbox = nil;
+        _segmentedRowTracking = nil;
+        _sliderTracking = nil;
+        _scrollbarDragging = NO;
         _isScrollingContent = NO;
         [self stopScrollInertia];
         _scrollVelocity = 0;
 
-        CGPoint inPanel = CGPointMake(point.x - _floatingPanel.frame.origin.x,
-                                      point.y - _floatingPanel.frame.origin.y);
-
+        CGPoint inPanel = CGPointMake(point.x - _floatingPanel.frame.origin.x, point.y - _floatingPanel.frame.origin.y);
         if (inPanel.y < kHeaderHeight) {
-            CGRect closeRect = CGRectMake(kPanelWidth - 36, (kHeaderHeight - 26) / 2.0f, 26, 26);
+            CGRect closeRect = CGRectMake(kPanelWidth - 47, 17, 28, 28);
             if (CGRectContainsPoint(CGRectInset(closeRect, -8, -8), inPanel)) {
                 _touchOnClose = YES;
             } else {
@@ -945,38 +885,37 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         }
 
         if (inPanel.x < kSideTabWidth) {
-            CGFloat topPad = 18.0f, gap = 10.0f;
-            CGFloat tabH = 34.0f;
+            CGFloat top = 16.0f;
+            CGFloat tabH = 52.0f;
+            CGFloat gap = 5.0f;
             for (NSInteger i = 0; i < 4; i++) {
-                CGFloat ty = topPad + (CGFloat)i * (tabH + gap);
-                CGRect tabRect = CGRectMake(5, ty + kHeaderHeight, kSideTabWidth - 10.0f, tabH);
+                CGRect tabRect = CGRectMake(7, kHeaderHeight + top + i * (tabH + gap), kSideTabWidth - 14, tabH);
                 if (CGRectContainsPoint(tabRect, inPanel)) {
-                    if (i != (NSInteger)_currentTab) [self tabButtonTapped:_tabButtons[i]];
+                    [self tabButtonTapped:_tabButtons[i]];
                     return YES;
                 }
             }
             return YES;
         }
 
-        CGFloat contentLeft = kSideTabWidth;
-        if (inPanel.x >= (kPanelWidth - kScrollBarWidth - 4)) {
+        if (inPanel.x >= kPanelWidth - kScrollBarWidth - 11) {
             CGFloat trackY = inPanel.y - kHeaderHeight;
-            CGFloat viewH = _contentScrollView.bounds.size.height;
-            CGFloat contentH = _contentScrollView.contentSize.height;
-            CGFloat maxOff = contentH - viewH;
-            if (maxOff > 0) {
-                CGFloat tY = _scrollbarThumb.frame.origin.y;
-                CGFloat tH = _scrollbarThumb.frame.size.height;
-                if (trackY >= tY && trackY <= tY + tH) {
+            CGFloat viewHeight = _contentScrollView.bounds.size.height;
+            CGFloat contentHeight = _contentScrollView.contentSize.height;
+            CGFloat maxOffset = contentHeight - viewHeight;
+            if (maxOffset > 0) {
+                CGFloat thumbY = _scrollbarThumb.frame.origin.y;
+                CGFloat thumbHeight = _scrollbarThumb.frame.size.height;
+                if (trackY >= thumbY && trackY <= thumbY + thumbHeight) {
                     _scrollbarDragging = YES;
                     _scrollbarDragStartY = point.y;
                     _scrollbarDragStartOffsetY = _contentScrollView.contentOffset.y;
                 } else {
-                    CGFloat trackH = _scrollbarTrack.frame.size.height;
-                    CGFloat range = trackH - tH;
+                    CGFloat trackHeight = _scrollbarTrack.frame.size.height;
+                    CGFloat range = trackHeight - thumbHeight;
                     if (range > 0) {
-                        CGFloat no = (trackY / trackH) * maxOff;
-                        _contentScrollView.contentOffset = CGPointMake(0, MAX(0, MIN(maxOff, no)));
+                        CGFloat offset = (trackY / trackHeight) * maxOffset;
+                        _contentScrollView.contentOffset = CGPointMake(0, MAX(0, MIN(maxOffset, offset)));
                         [self updateScrollbarLayout];
                     }
                 }
@@ -986,97 +925,107 @@ typedef NS_ENUM(NSInteger, MenuTab) {
 
         _scrollLastTouchY = point.y;
         _scrollLastTime = CACurrentMediaTime();
-
-        CGPoint inContent = CGPointMake(inPanel.x - contentLeft - 5,
-                                        inPanel.y - kHeaderHeight + _contentScrollView.contentOffset.y);
-
-        for (UIView *rv in _contentContainer.subviews) {
-            if ([rv isKindOfClass:[UISlider class]] || [rv isKindOfClass:[UILabel class]]) continue;
-            if (!CGRectContainsPoint(rv.frame, inContent)) continue;
-
-            NSString *segKey = objc_getAssociatedObject(rv, "segComboPrefsKey");
-            if (segKey) {
-                UIView *track = [rv viewWithTag:kSegmentTrackTag];
-                CGPoint inRow = CGPointMake(inContent.x - rv.frame.origin.x,
-                                            inContent.y - rv.frame.origin.y);
-                if (track && CGRectContainsPoint(track.frame, inRow))
-                    _segmentedRowTracking = rv;
+        CGPoint inContent = CGPointMake(inPanel.x - kSideTabWidth, inPanel.y - kHeaderHeight + _contentScrollView.contentOffset.y);
+        for (UIView *row in _contentContainer.subviews) {
+            if ([row isKindOfClass:[UISlider class]] || [row isKindOfClass:[UILabel class]]) continue;
+            if (!CGRectContainsPoint(row.frame, inContent)) continue;
+            NSString *segmentKey = objc_getAssociatedObject(row, "segComboPrefsKey");
+            if (segmentKey) {
+                UIView *track = [row viewWithTag:kSegmentTrackTag];
+                CGPoint inRow = CGPointMake(inContent.x - row.frame.origin.x, inContent.y - row.frame.origin.y);
+                if (track && CGRectContainsPoint(track.frame, inRow)) _segmentedRowTracking = row;
                 break;
             }
-
-            NSString *rk = objc_getAssociatedObject(rv, "key");
-            if ([rk isEqualToString:@"__exit_hud__"]) { _touchOnExitHUD = YES; break; }
-
-            for (UIView *sub in rv.subviews) {
-                if (objc_getAssociatedObject(sub, "isCheckbox")) { _activeCheckbox = sub; break; }
+            NSString *rowKey = objc_getAssociatedObject(row, "key");
+            if ([rowKey isEqualToString:@"__exit_hud__"]) {
+                _touchOnExitHUD = YES;
+                break;
+            }
+            for (UIView *subview in row.subviews) {
+                if (objc_getAssociatedObject(subview, "isCheckbox")) {
+                    _activeCheckbox = subview;
+                    break;
+                }
             }
             break;
         }
-
         if (!_activeCheckbox && !_touchOnExitHUD && !_segmentedRowTracking) {
-            for (UIView *v in _contentContainer.subviews) {
-                if ([v isKindOfClass:[UISlider class]] && CGRectContainsPoint(v.frame, inContent)) {
-                    _sliderTracking = (UISlider *)v; break;
+            for (UIView *view in _contentContainer.subviews) {
+                if ([view isKindOfClass:[UISlider class]]) {
+                    if (CGRectContainsPoint(view.frame, inContent)) _sliderTracking = (UISlider *)view;
+                } else {
+                    for (UIView *subview in view.subviews) {
+                        if ([subview isKindOfClass:[UISlider class]] && CGRectContainsPoint(view.frame, inContent)) {
+                            CGPoint local = CGPointMake(inContent.x - view.frame.origin.x, inContent.y - view.frame.origin.y);
+                            if (CGRectContainsPoint(subview.frame, local)) _sliderTracking = (UISlider *)subview;
+                        }
+                    }
                 }
+                if (_sliderTracking) break;
             }
         }
         return YES;
     }
 
-    if (ph == UITouchPhaseMoved) {
+    if (touchPhase == UITouchPhaseMoved) {
         if (pointerId != _trackingPointerId) return NO;
-
         if (_sliderTracking) {
-            CGPoint inPanel = CGPointMake(point.x - _floatingPanel.frame.origin.x,
-                                          point.y - _floatingPanel.frame.origin.y);
-            CGPoint inContent = CGPointMake(inPanel.x - kSideTabWidth - 5,
-                                            inPanel.y - kHeaderHeight + _contentScrollView.contentOffset.y);
-            UISlider *sl = _sliderTracking;
-            CGFloat ratio = (inContent.x - sl.frame.origin.x) / sl.frame.size.width;
+            CGPoint inPanel = CGPointMake(point.x - _floatingPanel.frame.origin.x, point.y - _floatingPanel.frame.origin.y);
+            CGPoint inContent = CGPointMake(inPanel.x - kSideTabWidth, inPanel.y - kHeaderHeight + _contentScrollView.contentOffset.y);
+            UIView *card = _sliderTracking.superview;
+            CGFloat relativeX = inContent.x - card.frame.origin.x - _sliderTracking.frame.origin.x;
+            CGFloat ratio = relativeX / _sliderTracking.frame.size.width;
             ratio = MAX(0, MIN(1, ratio));
-            sl.value = sl.minimumValue + (float)ratio * (sl.maximumValue - sl.minimumValue);
-            [self sliderChanged:sl];
+            _sliderTracking.value = _sliderTracking.minimumValue + ratio * (_sliderTracking.maximumValue - _sliderTracking.minimumValue);
+            [self sliderChanged:_sliderTracking];
             return YES;
         }
-
         if (_scrollbarDragging) {
-            CGFloat contentH = _contentScrollView.contentSize.height;
-            CGFloat viewH = _contentScrollView.bounds.size.height;
-            CGFloat maxOff = contentH - viewH;
-            if (maxOff <= 0) { _scrollbarDragging = NO; return YES; }
-            CGFloat newOff = _scrollbarDragStartOffsetY + (point.y - _scrollbarDragStartY);
-            _contentScrollView.contentOffset = CGPointMake(0, MAX(0, MIN(maxOff, newOff)));
+            CGFloat contentHeight = _contentScrollView.contentSize.height;
+            CGFloat viewHeight = _contentScrollView.bounds.size.height;
+            CGFloat maxOffset = contentHeight - viewHeight;
+            if (maxOffset <= 0) {
+                _scrollbarDragging = NO;
+                return YES;
+            }
+            CGFloat trackHeight = _scrollbarTrack.frame.size.height;
+            CGFloat thumbHeight = _scrollbarThumb.frame.size.height;
+            CGFloat ratio = (point.y - _scrollbarDragStartY) / MAX(1.0f, trackHeight - thumbHeight);
+            CGFloat offset = _scrollbarDragStartOffsetY + ratio * maxOffset;
+            _contentScrollView.contentOffset = CGPointMake(0, MAX(0, MIN(maxOffset, offset)));
             [self updateScrollbarLayout];
             return YES;
         }
-
         if (_menuDragging) {
             CGFloat dx = point.x - _menuDragStartTouch.x;
             CGFloat dy = point.y - _menuDragStartTouch.y;
             CGRect screen = self.view.bounds;
-            CGFloat newX = MAX(0, MIN(screen.size.width - kPanelWidth, _menuDragStartOrigin.x + dx));
-            CGFloat newY = MAX(0, MIN(screen.size.height - kPanelHeight, _menuDragStartOrigin.y + dy));
+            CGFloat newX = MAX(0, MIN(MAX(0, screen.size.width - kPanelWidth), _menuDragStartOrigin.x + dx));
+            CGFloat newY = MAX(0, MIN(MAX(0, screen.size.height - kPanelHeight), _menuDragStartOrigin.y + dy));
             _floatingPanel.frame = CGRectMake(newX, newY, kPanelWidth, kPanelHeight);
             return YES;
         }
-
-        CGFloat inPanelX = point.x - _floatingPanel.frame.origin.x;
-        CGFloat inPanelY = point.y - _floatingPanel.frame.origin.y;
-        if (inPanelY > kHeaderHeight && inPanelX > kSideTabWidth) {
+        CGFloat panelX = point.x - _floatingPanel.frame.origin.x;
+        CGFloat panelY = point.y - _floatingPanel.frame.origin.y;
+        if (panelY > kHeaderHeight && panelX > kSideTabWidth) {
             CFTimeInterval now = CACurrentMediaTime();
-            CGFloat dy = point.y - _scrollLastTouchY;
-            if (now - _scrollLastTime > 0.001) _scrollVelocity = -dy / (CGFloat)((now - _scrollLastTime) * 60.0);
-            [self applyScrollDelta:-dy];
-            if (ABS(dy) > 3) { _isScrollingContent = YES; _activeCheckbox = nil; _segmentedRowTracking = nil; _touchOnExitHUD = NO; }
+            CGFloat deltaY = point.y - _scrollLastTouchY;
+            if (now - _scrollLastTime > 0.001) _scrollVelocity = -deltaY / (CGFloat)((now - _scrollLastTime) * 60.0);
+            [self applyScrollDelta:-deltaY];
+            if (ABS(deltaY) > 3.0f) {
+                _isScrollingContent = YES;
+                _activeCheckbox = nil;
+                _segmentedRowTracking = nil;
+                _touchOnExitHUD = NO;
+            }
             _scrollLastTouchY = point.y;
             _scrollLastTime = now;
             return YES;
         }
     }
 
-    if (ph == UITouchPhaseEnded || ph == UITouchPhaseCancelled) {
+    if (touchPhase == UITouchPhaseEnded || touchPhase == UITouchPhaseCancelled) {
         if (pointerId != _trackingPointerId) return NO;
-
         if (_touchOnClose) {
             [self closeTapped];
         } else if (_touchOnExitHUD && !_isScrollingContent && self.onExitHUDRequested) {
@@ -1084,10 +1033,8 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         } else if (_activeCheckbox && !_isScrollingContent) {
             [self checkboxTappedWithView:_activeCheckbox];
         } else if (_segmentedRowTracking && !_isScrollingContent) {
-            CGPoint inPanel = CGPointMake(point.x - _floatingPanel.frame.origin.x,
-                                          point.y - _floatingPanel.frame.origin.y);
-            CGPoint inContent = CGPointMake(inPanel.x - kSideTabWidth - 5,
-                                            inPanel.y - kHeaderHeight + _contentScrollView.contentOffset.y);
+            CGPoint inPanel = CGPointMake(point.x - _floatingPanel.frame.origin.x, point.y - _floatingPanel.frame.origin.y);
+            CGPoint inContent = CGPointMake(inPanel.x - kSideTabWidth, inPanel.y - kHeaderHeight + _contentScrollView.contentOffset.y);
             [self applySegmentedSelectionForRow:_segmentedRowTracking touchInContent:inContent];
         } else if (_menuDragging) {
             [[NSUserDefaults standardUserDefaults] setFloat:_floatingPanel.frame.origin.x forKey:@"FloatingPanelX"];
@@ -1098,15 +1045,18 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         } else if (_isScrollingContent) {
             [self startScrollInertia];
         }
-
         _trackingPointerId = -1;
-        _touchOnClose = _touchOnExitHUD = _menuDragging = _scrollbarDragging = NO;
-        _activeCheckbox = nil; _segmentedRowTracking = nil; _sliderTracking = nil;
+        _touchOnClose = NO;
+        _touchOnExitHUD = NO;
+        _menuDragging = NO;
+        _scrollbarDragging = NO;
+        _activeCheckbox = nil;
+        _segmentedRowTracking = nil;
+        _sliderTracking = nil;
         _isScrollingContent = NO;
         return YES;
     }
-
-    return (insidePanel && pointerId == _trackingPointerId) || _scrollbarDragging;
+    return insidePanel && pointerId == _trackingPointerId;
 }
 
 @end
