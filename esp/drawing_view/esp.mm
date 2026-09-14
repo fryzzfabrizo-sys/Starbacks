@@ -147,71 +147,46 @@ static int         gAimLockLostFrames     = 0;
 static const int   kAimLockMaxLostFrames  = 10;
 static const NSUInteger kMaxTextLayerPoolSize = 128;
 
-static const uint64_t kTestFastFireRuntimeOffset = 0x270;
 static const float kTestFastFireValue = 0.2f;
 static uint64_t s_memoryAttributes = 0;
 static bool s_memoryAttributesSaved = false;
 static bool s_originalNoReload = false;
+static bool s_originalNoConsumeAmmo = false;
 static float s_originalFastFire = 1.0f;
-static uint64_t s_memoryWeapon = 0;
-static bool s_memoryWeaponSaved = false;
-static bool s_originalCostAmmo = true;
 
 static void RestoreMemoryFeatures(void) {
-    if (s_memoryAttributesSaved && isVaildPtr(s_memoryAttributes)) {
-        WriteAddr<bool>(s_memoryAttributes + kShootNoReload, s_originalNoReload);
-        WriteAddr<float>(s_memoryAttributes + kTestFastFireRuntimeOffset, s_originalFastFire);
-    }
-    if (s_memoryWeaponSaved && isVaildPtr(s_memoryWeapon)) {
-        WriteAddr<bool>(s_memoryWeapon + kWeaponCostAmmo, s_originalCostAmmo);
-    }
+    if (!s_memoryAttributesSaved || !isVaildPtr(s_memoryAttributes)) return;
+    WriteAddr<bool>(s_memoryAttributes + kShootNoReload, s_originalNoReload);
+    WriteAddr<bool>(s_memoryAttributes + kReloadNoConsumeAmmoClip, s_originalNoConsumeAmmo);
+    WriteAddr<float>(s_memoryAttributes + kFastFireOff, s_originalFastFire);
 }
 
 static void ResetMemoryFeatureState(void) {
     RestoreMemoryFeatures();
     s_memoryAttributes = 0;
     s_memoryAttributesSaved = false;
-    s_memoryWeapon = 0;
-    s_memoryWeaponSaved = false;
 }
 
 static void ApplyMemoryFeatures(uint64_t player) {
     uint64_t attributes = isVaildPtr(player) ? ReadAddr<uint64_t>(player + kPlayerAttributes) : 0;
     if (attributes != s_memoryAttributes) {
-        if (s_memoryAttributesSaved && isVaildPtr(s_memoryAttributes)) {
-            WriteAddr<bool>(s_memoryAttributes + kShootNoReload, s_originalNoReload);
-            WriteAddr<float>(s_memoryAttributes + kTestFastFireRuntimeOffset, s_originalFastFire);
-        }
+        RestoreMemoryFeatures();
         s_memoryAttributes = attributes;
         s_memoryAttributesSaved = false;
     }
 
-    if (isVaildPtr(attributes)) {
-        if (!s_memoryAttributesSaved) {
-            s_originalNoReload = ReadAddr<bool>(attributes + kShootNoReload);
-            s_originalFastFire = ReadAddr<float>(attributes + kTestFastFireRuntimeOffset);
-            s_memoryAttributesSaved = true;
-        }
-        WriteAddr<bool>(attributes + kShootNoReload, isNoReload ? true : s_originalNoReload);
-        WriteAddr<float>(attributes + kTestFastFireRuntimeOffset, isFastFire ? kTestFastFireValue : s_originalFastFire);
+    if (!isVaildPtr(attributes)) return;
+
+    if (!s_memoryAttributesSaved) {
+        s_originalNoReload = ReadAddr<bool>(attributes + kShootNoReload);
+        s_originalNoConsumeAmmo = ReadAddr<bool>(attributes + kReloadNoConsumeAmmoClip);
+        s_originalFastFire = ReadAddr<float>(attributes + kFastFireOff);
+        s_memoryAttributesSaved = true;
     }
 
-    uint64_t weapon = isVaildPtr(player) ? WeaponOnHand(player) : 0;
-    if (weapon != s_memoryWeapon) {
-        if (s_memoryWeaponSaved && isVaildPtr(s_memoryWeapon)) {
-            WriteAddr<bool>(s_memoryWeapon + kWeaponCostAmmo, s_originalCostAmmo);
-        }
-        s_memoryWeapon = weapon;
-        s_memoryWeaponSaved = false;
-    }
-
-    if (isVaildPtr(weapon)) {
-        if (!s_memoryWeaponSaved) {
-            s_originalCostAmmo = ReadAddr<bool>(weapon + kWeaponCostAmmo);
-            s_memoryWeaponSaved = true;
-        }
-        WriteAddr<bool>(weapon + kWeaponCostAmmo, isVohaDan ? false : s_originalCostAmmo);
-    }
+    WriteAddr<bool>(attributes + kShootNoReload, isNoReload ? true : s_originalNoReload);
+    WriteAddr<bool>(attributes + kReloadNoConsumeAmmoClip, isVohaDan ? true : s_originalNoConsumeAmmo);
+    WriteAddr<float>(attributes + kFastFireOff, isFastFire ? kTestFastFireValue : s_originalFastFire);
 }
 
 static uint64_t cachedMatchGame  = 0;

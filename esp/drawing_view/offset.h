@@ -73,6 +73,7 @@
 #define kWeaponCostAmmo         0x7B8   // protected bool m_CostAmmo
 #define kPlayerAttributes       0x700   // protected PlayerAttributes
 #define kShootNoReload          0xD9    // public bool ShootNoReload
+#define kReloadNoConsumeAmmoClip 0xD8    // public bool ReloadNoConsumeAmmoclip
 #define kFastFireOff            0x208  // Tốc độ bắn (Fast Fire)
 #define kFollowCamera            0x628   // LocalPlayer -> FollowCamera
 #define kFOVOffset               0x70 
