@@ -1,7 +1,6 @@
 // silent.mm
 // Silent aim через ITransformNode головы (0x638).
-// Prediction для движущихся и прыгающих врагов.
-// Всё считается в воркере — main thread только выставляет цель.
+// Prediction только по X/Z — без Y (иначе пули улетают вверх).
 
 #import "../esp/Core/GameLogic.h"
 #import "../esp/drawing_view/esp.h"
@@ -17,18 +16,16 @@ extern uint64_t g_SilentBestTarget;
 extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
-// ─── Offsets (из твоего рабочего файла) ──────────────────
+// ─── Offsets (твои рабочие) ──────────────────────────────
 static constexpr uint64_t kPlayer_LastAimInfo = 0xDC8;
 static constexpr uint64_t kHit_RayDir         = 0x40;
 static constexpr uint64_t kHit_StartPos       = 0x4C;
 static constexpr uint64_t kPlayer_HeadNode    = 0x638;
 static constexpr uint64_t kBodyPart_TransNode = 0x10;
 
-// ─── Prediction ──────────────────────────────────────────
-static constexpr float kPredictTimeSec = 0.03f;   // 30мс упреждения
-static constexpr float kMaxVel         = 20.0f;   // м/с — отсекаем мусор
-static constexpr float kMinDt          = 0.001f;
-static constexpr float kMaxDt          = 0.050f;
+// ─── Prediction (только X/Z) ─────────────────────────────
+static constexpr float kPredictTimeSec = 0.02f;   // 20мс мягкое упреждение
+static constexpr float kMaxVelXZ       = 12.0f;   // м/с — только X/Z
 
 // ─── Shared state ────────────────────────────────────────
 static std::mutex        g_lock;
@@ -38,7 +35,7 @@ static uint64_t          g_aimPtr     = 0;
 static uint64_t          g_targetPawn = 0;
 static uint64_t          g_lastMatch  = 0;
 
-// Prediction state — обновляется только в воркере
+// Prediction state (только в воркере)
 static uint64_t g_predPawn    = 0;
 static Vector3  g_predLastPos = {0, 0, 0};
 static std::chrono::steady_clock::time_point g_predLastTime;
@@ -61,7 +58,8 @@ static Vector3 HeadPos(uint64_t pawn) {
     return getPositionExt(node);
 }
 
-static Vector3 PredictHead(uint64_t pawn, const Vector3& cur) {
+// Prediction по X/Z. Y всегда оставляем как есть — иначе пули уходят вверх.
+static Vector3 PredictHeadXZ(uint64_t pawn, const Vector3& cur) {
     Vector3 result = cur;
 
     if (pawn != g_predPawn) {
@@ -71,7 +69,6 @@ static Vector3 PredictHead(uint64_t pawn, const Vector3& cur) {
         g_predValid    = true;
         return result;
     }
-
     if (!g_predValid) {
         g_predLastPos  = cur;
         g_predLastTime = std::chrono::steady_clock::now();
@@ -81,24 +78,20 @@ static Vector3 PredictHead(uint64_t pawn, const Vector3& cur) {
 
     auto now = std::chrono::steady_clock::now();
     float dt = std::chrono::duration<float>(now - g_predLastTime).count();
-
-    if (dt < kMinDt || dt > kMaxDt) {
+    if (dt < 0.002f || dt > 0.100f) {
         g_predLastPos  = cur;
         g_predLastTime = now;
         return result;
     }
 
-    Vector3 vel = {
-        (cur.x - g_predLastPos.x) / dt,
-        (cur.y - g_predLastPos.y) / dt,
-        (cur.z - g_predLastPos.z) / dt
-    };
+    float vx = (cur.x - g_predLastPos.x) / dt;
+    float vz = (cur.z - g_predLastPos.z) / dt;
 
-    float vlen = sqrtf(vel.x*vel.x + vel.y*vel.y + vel.z*vel.z);
-    if (vlen > 0.001f && vlen < kMaxVel) {
-        result.x += vel.x * kPredictTimeSec;
-        result.y += vel.y * kPredictTimeSec;
-        result.z += vel.z * kPredictTimeSec;
+    float vlenXZ = sqrtf(vx*vx + vz*vz);
+    if (vlenXZ > 0.001f && vlenXZ < kMaxVelXZ) {
+        result.x += vx * kPredictTimeSec;
+        result.z += vz * kPredictTimeSec;
+        // Y не трогаем — только обновляем семпл
     }
 
     g_predLastPos  = cur;
@@ -113,28 +106,18 @@ static void SilentWorker() {
             continue;
         }
 
-        uint64_t h;
-        uint64_t target;
+        uint64_t h, target;
         {
             std::lock_guard<std::mutex> lk(g_lock);
             h      = g_aimPtr;
             target = g_targetPawn;
         }
+        if (!validPtr(h) || !validPtr(target)) { std::this_thread::yield(); continue; }
 
-        if (!validPtr(h) || !validPtr(target)) {
-            std::this_thread::yield();
-            continue;
-        }
-
-        // Читаем позицию головы каждый тик — свежие данные
         Vector3 rawPos = HeadPos(target);
-        if (!validVec(rawPos)) {
-            std::this_thread::yield();
-            continue;
-        }
+        if (!validVec(rawPos)) { std::this_thread::yield(); continue; }
 
-        // Prediction на основе velocity
-        Vector3 tPos = PredictHead(target, rawPos);
+        Vector3 tPos = PredictHeadXZ(target, rawPos);
 
         Vector3 origin = ReadAddr<Vector3>(h + kHit_StartPos);
         Vector3 diff   = { tPos.x - origin.x,
@@ -186,6 +169,12 @@ void RunSilentAim() {
         return;
     }
 
+    Vector3 tPos = HeadPos(target);
+    if (!validVec(tPos)) {
+        g_hasData.store(false, std::memory_order_release);
+        return;
+    }
+
     {
         std::lock_guard<std::mutex> lk(g_lock);
         g_aimPtr     = aimPtr;
@@ -193,13 +182,11 @@ void RunSilentAim() {
     }
     g_hasData.store(true, std::memory_order_release);
 
-    // Мгновенная первая запись — чтобы сработало с первого кадра
-    Vector3 tPos = HeadPos(target);
-    if (validVec(tPos)) {
-        Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
-        Vector3 diff   = { tPos.x - origin.x,
-                           tPos.y - origin.y,
-                           tPos.z - origin.z };
-        WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
-    }
+    // Мгновенная запись в главном потоке — как в твоём рабочем silent 3.mm.
+    // Это лечит «пропущенные пули» — даже если воркер не успел, запись уже есть.
+    Vector3 origin = ReadAddr<Vector3>(aimPtr + kHit_StartPos);
+    Vector3 diff   = { tPos.x - origin.x,
+                       tPos.y - origin.y,
+                       tPos.z - origin.z };
+    WriteAddr<Vector3>(aimPtr + kHit_RayDir, diff);
 }
