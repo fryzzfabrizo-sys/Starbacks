@@ -151,10 +151,12 @@ static const NSUInteger kMaxTextLayerPoolSize = 128;
 static uint64_t s_memoryAttributes = 0;
 static bool s_memoryAttributesSaved = false;
 static bool s_originalNoReload = false;
+static float s_originalRunSpeed = 1.0f;
 
 static void RestoreMemoryFeatures(void) {
     if (!s_memoryAttributesSaved || !isVaildPtr(s_memoryAttributes)) return;
     WriteAddr<bool>(s_memoryAttributes + kShootNoReload, s_originalNoReload);
+    WriteAddr<float>(s_memoryAttributes + kPlayerRunSpeedScale, s_originalRunSpeed);
 }
 
 static void ResetMemoryFeatureState(void) {
