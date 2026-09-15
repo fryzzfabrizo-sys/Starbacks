@@ -36,6 +36,8 @@ bool testGhost = NO;
 bool dunhanh = NO;
 
 bool isNoReload    = NO;
+bool isFastFire    = NO;
+bool isWallCheck   = NO;
 
 bool isShowFov = NO;
 
@@ -95,6 +97,8 @@ void ESPSyncFromPrefs(void) {
     isAimbot          = ESPPrefsBool(NSSENCRYPT("Aimbot"),          NO);
 
     isNoReload = ESPPrefsBool(NSSENCRYPT("NoReload"), NO);
+    isFastFire = ESPPrefsBool(NSSENCRYPT("FastFire"), NO);
+    isWallCheck = ESPPrefsBool(NSSENCRYPT("WallCheck"), NO);
 
     isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
     aimsilent1 = ESPPrefsBool(NSSENCRYPT("SilentAim"), NO);
@@ -145,10 +149,12 @@ static const NSUInteger kMaxTextLayerPoolSize = 128;
 static uint64_t s_memoryAttributes = 0;
 static bool s_memoryAttributesSaved = false;
 static bool s_originalNoReload = false;
+static float s_originalFastFire = 1.0f;
 
 static void RestoreMemoryFeatures(void) {
     if (!s_memoryAttributesSaved || !isVaildPtr(s_memoryAttributes)) return;
     WriteAddr<bool>(s_memoryAttributes + kShootNoReload, s_originalNoReload);
+    if (isfinite(s_originalFastFire) && s_originalFastFire > 0.0f && s_originalFastFire < 4.0f) WriteAddr<float>(s_memoryAttributes + kFastFireOffset, s_originalFastFire);
 }
 
 static void ResetMemoryFeatureState(void) {
@@ -169,10 +175,12 @@ static void ApplyMemoryFeatures(uint64_t player) {
 
     if (!s_memoryAttributesSaved) {
         s_originalNoReload = ReadAddr<bool>(attributes + kShootNoReload);
+        s_originalFastFire = ReadAddr<float>(attributes + kFastFireOffset);
         s_memoryAttributesSaved = true;
     }
 
     WriteAddr<bool>(attributes + kShootNoReload, isNoReload ? true : s_originalNoReload);
+    if (isfinite(s_originalFastFire) && s_originalFastFire > 0.0f && s_originalFastFire < 4.0f) WriteAddr<float>(attributes + kFastFireOffset, isFastFire ? kFastFireValue : s_originalFastFire);
 }
 
 static uint64_t cachedMatchGame  = 0;
@@ -765,6 +773,7 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
             if (!isAimCheckVisible && !aimVis && !aimMagnet) valid = NO;
+            if (isWallCheck && !aimVis) valid = NO;
 
             if (valid) {
                 // ── ФИЛЬТР: цель должна быть ВПЕРЕДИ камеры (не сзади, не сбоку) ──
