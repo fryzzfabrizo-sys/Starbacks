@@ -102,17 +102,6 @@ static void ColliderBoostWorker(void) {
 }
 
 void ColliderBoostStart(void) {
-    bool exp = false;
-    if (g_started.compare_exchange_strong(exp, true))
-        std::thread(ColliderBoostWorker).detach();
+    return;
 }
 
-@interface _ColliderBoostBootstrap : NSObject @end
-@implementation _ColliderBoostBootstrap
-+ (void)load { ColliderBoostStart(); }
-@end
-
-__attribute__((constructor))
-static void _collider_boost_ctor(void) {
-    ColliderBoostStart();
-}
