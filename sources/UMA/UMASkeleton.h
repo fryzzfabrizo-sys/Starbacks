@@ -14,7 +14,7 @@ static inline bool valid(uint64_t value) {
 
 static inline uint64_t readUmaData(uint64_t avatarManager) {
     if (!valid(avatarManager)) return 0;
-    const uint64_t umaOffsets[] = { kUmaDataOffsetPrimary, kUmaDataOffsetFallback };
+    const uint64_t umaOffsets[] = { kUmaDataOffsetAvatarBase, kUmaDataOffsetPrimary, kUmaDataOffsetFallback };
     for (uint64_t offset : umaOffsets) {
         uint64_t direct = ReadAddr<uint64_t>(avatarManager + offset);
         if (valid(direct) && valid(ReadAddr<uint64_t>(direct + kUmaSkeletonOffset))) return direct;

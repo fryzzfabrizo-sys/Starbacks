@@ -1,179 +1,148 @@
 #pragma once
 
-#define kGameFacadeTypeInfo      0xBFD8978
-#define kTypeInfoStatics         0xB8
-#define kCurrentGame             0x0
-#define kCurrentMatchGame        0x8
-#define kMatch                   0x90
-#define kMatchLocalPlayer        0xD8
-#define kCameraControllerManager 0xD8
+#define kGameFacadeTypeInfo      0xBFD8978 // GameFacade type info; exception: user requested this one remain unchanged
 
-#define kMainCamera              0x20
-#define kCameraInner            0x10
+// ─── Player / match / camera offsets ─────────────────────────────────────
+#define kTypeInfoStatics         0xB8    // GameFacade.TypeInfo: static fields pointer
+#define kCurrentGame             0x0     // GameFacade static: current game
+#define kCurrentMatchGame        0x8     // GameFacade static: current match game
+#define kMatch                   0x90    // MatchGame: Match
+#define kMatchLocalPlayer        0xD8    // Match: local Player
+#define kCameraControllerManager 0xD8    // MatchGame: CameraControllerManager
+#define kMainCamera              0x20    // CameraControllerManager: main Camera
+#define kCameraInner             0x10    // Camera: internal camera data
+#define kViewMatrixOff           0x80    // Camera data: view matrix
+#define kProjMatrixOff           0xC0    // Camera data: projection matrix
+#define kBodyPartTransNode       0x10    // BodyPart: ITransformNode
+#define kHeadNode                0x638   // Player: head ITransformNode
+#define kHipNode                 0x640   // Player: hip ITransformNode
+#define kLeftAnkleNode           0x670   // Player: left ankle ITransformNode
+#define kRightAnkleNode          0x678   // Player: right ankle ITransformNode
+#define kRightToeNode            0x688   // Player: right toe ITransformNode
+#define kLeftToeNode             0x680   // Player: left toe ITransformNode
+#define kLeftShoulderNode        0x658   // Player: left shoulder ITransformNode
+#define kRightShoulderNode       0x660   // Player: right shoulder ITransformNode
+#define kLeftHandNode            0x6B8   // Player: left hand ITransformNode
+#define kRightHandNode           0x6B0   // Player: right hand ITransformNode
+#define kLeftElbowNode           0x6C8   // Player: left elbow ITransformNode
+#define kRightElbowNode          0x6C0   // Player: right elbow ITransformNode
+#define kPlayerIDStruct          0x2D0   // Player: PlayerID struct area
+#define kPlayerID                0x3A0   // Player: PlayerID
+#define kUserID                 0x3A0   // Player: user ID alias
+#define kIsClientBot             0x438   // Player: IsClientBot
+#define kDataPool               0x70    // Player: data pool
+#define kDataPoolInner          0x10    // DataPool: inner object
+#define kDataPoolEntriesBase    0x20    // DataPool: entries base
+#define kDataPoolEntryStride    0x8     // DataPool: entry stride
+#define kDataPoolValue          0x18    // DataPool entry: value
+#define kAimRotation            0x5AC   // Player: aim rotation
+#define kAimRotationAux         0x5BC   // Player: auxiliary aim rotation
+#define kIsFiring               0x770   // Player: firing data/state
+#define _0x27276BC              0x708   // Player: AvatarManager m_AvatarManager
+#define _0x28726BD              0x138   // AvatarManager: IUmaAvatar m_Avatar
+#define _0x2872DCF              0x101   // IUmaAvatar data: IsVisible
+#define kMainCameraTransform    0x380   // Player: main camera transform
+#define kMyPhysXData            0x1B80   // Player: PhysicalCCT/physx data
+#define kPhxNpeononogeo         0x20    // PhysX data: geometry object
+#define kGhgState               0x10    // Geometry object: pose state
+#define kKnocked                 0x1150  // Player: protected JALFABPGLNE knockdown state object
+#define kKnockedDownBleeding     0x11A0  // Player: IsKnockedDownBleed
+#define kKnockedDownBleedingGS   0x11A1  // Player: IsKnockDownBleedingFromGS
+#define kMatchPlayerDict        0x148   // Match: player dictionary
+#define kDictEntries            0x18    // Dictionary: entries array
+#define kDictCount              0x20    // Dictionary: count
+#define kIl2CppArrayMaxLength   0x18    // Il2CppArray: max length
+#define kIl2CppArrayItems       0x20    // Il2CppArray: first item
+#define kDictEntryStrideBytePlayer 24   // Dictionary player entry stride
+#define kDictEntryValueOffByte 16      // Dictionary player entry: value
+#define kTransformInner         0x10    // Transform object: inner
+#define kTransformMatrix        0x38    // Transform inner: matrix
+#define kTransformIndex         0x40    // Transform inner: matrix index
+#define kMatrixList             0x18    // Transform matrix: list
+#define kMatrixIndices          0x20    // Transform matrix: indices
+#define kNickname               0x430   // Player: nickname
+#define kStringFirstChar        0x14    // Il2CppString: first character
 
-#define kViewMatrixOff          0x80
-#define kProjMatrixOff          0xC0
-#define kBodyPartTransNode       0x10
-#define kHeadNode               0x638  // ITransformNode Head
-#define kHipNode                0x640  // ITransformNode Hip
-#define kLeftAnkleNode           0x670
-#define kRightAnkleNode          0x678
-#define kRightToeNode            0x688
-#define kLeftToeNode             0x680
-#define kLeftShoulderNode        0x658
-#define kRightShoulderNode       0x660
-#define kLeftHandNode            0x6B8
-#define kRightHandNode           0x6B0
-#define kLeftElbowNode           0x6C8
-#define kRightElbowNode          0x6C0
-#define kPlayerIDStruct         0x2D0
-#define kPlayerID               0x3A0
-#define kUserID                 0x3A0
-#define kIsClientBot            0x438  // confirmed
-#define kDataPool               0x70
-#define kDataPoolInner          0x10
-#define kDataPoolEntriesBase    0x20
-#define kDataPoolEntryStride    0x8
-#define kDataPoolValue          0x18
-#define kAimRotation            0x5AC
-#define kAimRotationAux         0x5BC
-#define kIsFiring               0x770  // DataPool entry index (used via get_IsFiring)
+// ─── Weapon / PlayerAttributes ─────────────────────────────────────────────
+#define _0x5BC2862              0x6D8   // Player: InventoryManager / OMELKCOGCBK
+#define _0x2862BCD              0xA0    // InventoryManager: itemOnHand / CHAFOMFBKEG
+#define kWeaponCostAmmo         0x7B8   // Legacy weapon field, currently unused
+#define kPlayerAttributes       0x700   // Player: PlayerAttributes
+#define kReloadNoConsumeAmmoclip 0xD8   // PlayerAttributes: ReloadNoConsumeAmmoclip
+#define kShootNoReload          0xD9    // PlayerAttributes: ShootNoReload
+#define kFollowCamera           0x628   // Player: FollowCamera
+#define kFOVOffset              0x70    // FollowCamera: field of view
+#define kPhysCCT                0x200   // Player: PhysicalCCT pointer
+#define kPhysCCT_Velocity       0x17C   // PhysicalCCT: velocity
+#define kChestNode              0x648   // Player: chest ITransformNode
+#define kNeckNode               0x640   // Player: neck ITransformNode
+#define kSAim1                  0x7D8   // Player: IsPrepareAttack
+#define kLockAimCollider        0x140   // Player: LockAimCollider backing
+#define kAimCollider_Ptr        0x6C8   // Player: AimCollider pointer
+#define kFollowCamera_Ptr       0x620   // Player: FollowCamera pointer
+#define kIsFire_Backing         0x7D0   // Player: IsFire backing
+#define kLastAimInfo_Alt        0xDC4   // Android Player: alternate LastAimInfo
+#define kLastAimInfoOffset      0xDC8   // OB54 Player: LastAimInfo field used by silent aim
+#define kIsVisible_Uma          0x100   // UMA data: IsVisible
+#define kUmaData                0x30    // Legacy UMA data alias
+#define kHit_RayDirectionOffset 0x40    // HitInfo: direction
+#define kHit_StartPositionOffset 0x4C   // HitInfo: startPosition
+#define kHit_Scatter             0x5C   // HitInfo/GMPGMPFNMFP: scatter
 
-#define _0x27276BC 0x708// protected AvatarManager m_AvatarManager; // 0x620 protected AvatarManager FOGJNGDMJKJ; // 0x710
+// ─── Raw external UMA skeleton ─────────────────────────────────────────────
+#define kUmaAvatarManagerOffset 0x708  // Player: AvatarManager m_AvatarManager
+#define kUmaAvatarOffset        0x138  // AvatarManager: IUmaAvatar m_Avatar
+#define kUmaDataOffsetAvatarBase 0x28   // UMAAvatarBase: public UMAData umaData (OB54 dump, TypeDefIndex 1093)
+#define kUmaDataOffsetPrimary   0x30   // IUmaAvatar concrete fallback: UMAData reference candidate
+#define kUmaDataOffsetFallback 0x38   // IUmaAvatar concrete fallback: UMAData reference candidate
+#define kUmaSkeletonOffset      0x138  // UMAData: UMASkeleton skeleton
+#define kUmaBoneListOffset      0x20   // UMASkeleton: boneHashDataBackup
+#define kUmaBoneDictionaryOffset 0x28  // UMASkeleton: boneHashDataLookup
+#define kUmaListItemsOffset     0x10   // Unity List<T>: _items
+#define kUmaListSizeOffset      0x18   // Unity List<T>: _size
+#define kUmaArrayItemsOffset    0x20   // Il2CppArray: first element
+#define kUmaBoneNameHashOffset  0x10   // BoneData: boneNameHash
+#define kUmaBoneTransformOffset 0x18   // BoneData: boneTransform
+#define kUmaDictionaryEntriesOffset 0x18 // Dictionary: entries
+#define kUmaDictionaryCountOffset 0x20 // Dictionary: count
+#define kUmaDictionaryEntryStride 0x18 // Dictionary.Entry<int,BoneData>
+#define kUmaDictionaryEntryValueOffset 0x10 // Dictionary.Entry.value
+#define kUmaBoneHeadHash          (-2111735698) // BaseBoneMale_Mesh asset: bone_Head
+#define kUmaBoneNeckHash          (96688289)    // BaseBoneMale_Mesh asset: bone_Neck
+#define kUmaBoneHipsHash          (1529948125)  // BaseBoneMale_Mesh asset: bone_Hips
+#define kUmaBoneSpineHash         (-1051086991) // BaseBoneMale_Mesh asset: bone_Spine
+#define kUmaBoneSpine1Hash        (-1541408846) // BaseBoneMale_Mesh asset: bone_Spine1
+#define kUmaBoneLeftArmHash       (1604555488)  // BaseBoneMale_Mesh asset: bone_LeftArm
+#define kUmaBoneLeftForeArmHash   (-1129867206) // BaseBoneMale_Mesh asset: bone_LeftForeArm
+#define kUmaBoneLeftHandHash      (1892485702)  // BaseBoneMale_Mesh asset: bone_LeftHand
+#define kUmaBoneRightArmHash      (-1391784435) // BaseBoneMale_Mesh asset: bone_RightArm
+#define kUmaBoneRightForeArmHash  (1507255706)  // BaseBoneMale_Mesh asset: bone_RightForeArm
+#define kUmaBoneRightHandHash     (-1367065569) // BaseBoneMale_Mesh asset: bone_RightHand
+#define kUmaBoneLeftLegUpperHash  (-285661123)  // BaseBoneMale_Mesh asset: bone_LeftLegUpper
+#define kUmaBoneLeftLegHash       (-1305646021) // BaseBoneMale_Mesh asset: bone_LeftLeg
+#define kUmaBoneLeftAnkleHash     (-344692431)  // BaseBoneMale_Mesh asset: bone_LeftAnkle
+#define kUmaBoneLeftToeHash       (-1258743979) // BaseBoneMale_Mesh asset: bone_LeftToe
+#define kUmaBoneRightLegUpperHash (952826536)   // BaseBoneMale_Mesh asset: bone_RightLegUpper
+#define kUmaBoneRightLegHash      (1082519766)  // BaseBoneMale_Mesh asset: bone_RightLeg
+#define kUmaBoneRightAnkleHash    (-115488425)  // BaseBoneMale_Mesh asset: bone_RightAnkle
+#define kUmaBoneRightToeHash      (1179749304)  // BaseBoneMale_Mesh asset: bone_RightToe
 
-#define _0x28726BD 0x138// internal IUmaAvatar m_Avatar; // 0x118 internal IUmaAvatar EEAGBKBMBLD; // 0x128
-
-#define _0x2872DCF 0x101// private bool IsVisible; // 0x101
-
-
-#define kMainCameraTransform    0x380
-#define kMyPhysXData            0x1B80
-#define kPhxNpeononogeo         0x20
-#define kGhgState               0x10
-#define kKnocked                 0x1150
-#define kKnockedDownBleeding     0x11A0
-#define kKnockedDownBleedingGS   0x11A1
-#define kMatchPlayerDict        0x148
-#define kDictEntries            0x18
-#define kDictCount              0x20
-#define kIl2CppArrayMaxLength   0x18
-#define kIl2CppArrayItems       0x20
-#define kDictEntryStrideBytePlayer   24
-#define kDictEntryValueOffByte       16
-#define kTransformInner         0x10
-#define kTransformMatrix        0x38
-#define kTransformIndex         0x40
-#define kMatrixList             0x18
-#define kMatrixIndices          0x20
-#define kNickname               0x430  // confirmed
-#define kStringFirstChar        0x14
-// ─── Weapon ───────────────────────────────────
-#define _0x5BC2862 0x6D8 // protected OMELKCOGCBK LPEALCPGJBL; // 0x6D8
-
-#define _0x2862BCD 0xA0//private NAELPAAELNO CHAFOMFBKEG; // 0xA0
-
-#define kWeaponCostAmmo         0x7B8   // protected bool m_CostAmmo
-#define kPlayerAttributes       0x700   // protected PlayerAttributes
-#define kReloadNoConsumeAmmoclip 0xD8  // OB54dump.cs: PlayerAttributes.ReloadNoConsumeAmmoclip
-#define kShootNoReload          0xD9    // public bool ShootNoReload
-#define kFollowCamera            0x628   // LocalPlayer -> FollowCamera
-#define kFOVOffset               0x70 
-// Velocity prediction (OB54)
-#define kPhysCCT          0x200   // PhysicalCCT pointer on Player
-#define kPhysCCT_Velocity 0x17C   // Vector3 Velocity in PhysicalCCT
-
-// Bone nodes OB54 (OB53 - 8)
-#define kChestNode        0x648   // ITransformNode Breast/Chest
-#define kNeckNode         0x640   // hip/neck position
-
-// Silent aim check
-#define kSAim1            0x7D8   // IFCJGLEOGDD bool (IsPrepareAttack, same OB53/OB54)
-
-// Из Offsets.json (@THE_LION_CHEATS) — OB54 подтверждено
-#define kLockAimCollider        0x140  // LockAimCollider_Backing (для silent aim HitCollider)
-#define kAimCollider_Ptr        0x6C8  // AimCollider_Ptr (aim collider на Player)
-#define kFollowCamera_Ptr       0x620  // FollowCamera_Ptr
-#define kIsFire_Backing         0x7D0  // IsFire_Backing (JSON: 0x7D0)
-#define kLastAimInfo_Alt        0xDC4  // LastAimInfo_Ptr Android ref (iOS = 0xDC8)
-#define kIsVisible_Uma          0x100  // IsVisible offset в umaData
-#define kUmaData                0x30   // umaData offset внутри AvatarManager
-
-// Из Hooks.h: float PGCPFOAJHBM — разброс пули в GMPGMPFNMFP
-#define kHit_RayDirectionOffset 0x40 // Hooks.h: HitInfo.direction
-#define kHit_StartPositionOffset 0x4C // Hooks.h: HitInfo.startPosition
-#define kHit_Scatter  0x5C // Hooks.h: GMPGMPFNMFP scatter
-
-// ─── Weapon / PlayerAttributes (OB54dump.cs) ──────────────────────────────
-#define kReloadNoConsumeAmmoclip 0xD8 // PlayerAttributes.ReloadNoConsumeAmmoclip
-#define kShootNoReload           0xD9 // PlayerAttributes.ShootNoReload
-
-// ─── Aim Magnet external memory ────────────────────────────────────────────
-#define kMagRootNodeOffset       0x660  // OB54 Player: root ITransformNode
+// ─── Runtime tuning / external scan values ─────────────────────────────────
+#define kMagRootNodeOffset       0x660  // Player: root ITransformNode
 #define kMagBodyPartOffset       0x10   // ITransformNode: body-part Transform
 #define kMagInnerOffset          0x10   // Transform wrapper: internal transform
 #define kMagMatrixOffset         0x38   // Transform object: matrix pointer
-#define kMagPositionOffset       0x90   // Transform matrix: world position Vector3
-#define kMagMaxDisplacementValue 5.50f  // 5.0 was stable; above this entered the fake-damage zone
+#define kMagPositionOffset       0x90   // Transform matrix: world position
+#define kMagMaxDisplacementValue 5.50f  // 5.0 stable; fake damage began above this
 #define kMagTickMilliseconds     4      // Magnet worker cadence
-#define kMagReleaseMilliseconds  200    // Magnet restore delay
-
-// ─── Aim Magnet collider ────────────────────────────────────────────────────
-#define kColliderManagedOffset       0xAB0 // OB54 Player: CapsuleCollider managed reference
-#define kColliderNativePointerOffset 0x10  // Unity Component: native collider pointer
-#define kColliderRadiusOffset        0x80  // Native CapsuleCollider: radius
-#define kColliderHeightOffset        0x84  // Native CapsuleCollider: height
-#define kColliderBoostRadiusValue     7.00f // Collider boost paired with 5.5 displacement
-#define kColliderBoostHeightValue    14.00f // Collider boost paired with 5.5 displacement
-
-// ─── Silent Aim external memory ────────────────────────────────────────────
-#define kLastAimInfoOffset              0xDC8 // OB54 iOS Player: LastAimInfo
-#define kSilentHeadNodeOffset           0x638 // OB54 Player: ITransformNode Head
-#define kSilentBodyPartTransformOffset  0x10  // ITransformNode: Transform
-#define kHitRayDirectionOffset          0x40  // Hooks.h HitInfo.direction
-#define kHitStartPositionOffset         0x4C  // Hooks.h HitInfo.startPosition
-#define kHitScatterOffset               0x5C  // Hooks.h GMPGMPFNMFP scatter
-
-// ─── No Recoil external value scan ──────────────────────────────────────────
-#define kNoRecoilOriginalValue    1016018816U // Hooks.h/GMPGMPFNMFP original value
-#define kNoRecoilModifiedValue    180U        // Hooks.h/GMPGMPFNMFP active value
-#define kNoRecoilScanStartAddress 0x100000000ULL // External heap scan lower bound
-#define kNoRecoilScanEndAddress   0x4000000000ULL // External heap scan upper bound
-
-// ─── Raw external UMA skeleton ──────────────────────────────────────────────
-#define kUmaAvatarManagerOffset 0x708 // OB54 Player: AvatarManager m_AvatarManager
-#define kUmaAvatarOffset        0x138 // OB54 AvatarManager: IUmaAvatar m_Avatar
-#define kUmaDataOffsetPrimary   0x30  // UMA external chain: IUmaAvatar -> UMAData
-#define kUmaDataOffsetFallback  0x38  // OB54 fallback UMAData reference
-#define kUmaSkeletonOffset      0x138 // OB54 UMAData: UMASkeleton skeleton
-#define kUmaBoneListOffset      0x20  // OB54 UMASkeleton: boneHashDataBackup
-#define kUmaBoneDictionaryOffset 0x28 // OB54 UMASkeleton: boneHashDataLookup
-#define kUmaListItemsOffset     0x10  // Unity List<T>: _items
-#define kUmaListSizeOffset      0x18  // Unity List<T>: _size
-#define kUmaArrayItemsOffset    0x20  // Il2CppArray: first element
-#define kUmaBoneNameHashOffset  0x10  // OB54 BoneData: boneNameHash
-#define kUmaBoneTransformOffset 0x18  // OB54 BoneData: Transform boneTransform
-#define kUmaDictionaryEntriesOffset 0x18 // Unity Dictionary: _entries
-#define kUmaDictionaryCountOffset   0x20 // Unity Dictionary: _count
-#define kUmaDictionaryEntryStride   0x18 // Dictionary.Entry<int,BoneData>
-#define kUmaDictionaryEntryValueOffset 0x10 // Dictionary.Entry.value
-
-// Hashes from UMA/BaseBoneMale_Mesh boneNameHashes asset map.
-#define kUmaBoneHeadHash          (-2111735698)
-#define kUmaBoneNeckHash          (96688289)
-#define kUmaBoneHipsHash          (1529948125)
-#define kUmaBoneSpineHash         (-1051086991)
-#define kUmaBoneSpine1Hash        (-1541408846)
-#define kUmaBoneLeftArmHash       (1604555488)
-#define kUmaBoneLeftForeArmHash   (-1129867206)
-#define kUmaBoneLeftHandHash      (1892485702)
-#define kUmaBoneRightArmHash      (-1391784435)
-#define kUmaBoneRightForeArmHash  (1507255706)
-#define kUmaBoneRightHandHash     (-1367065569)
-#define kUmaBoneLeftLegUpperHash  (-285661123)
-#define kUmaBoneLeftLegHash       (-1305646021)
-#define kUmaBoneLeftAnkleHash     (-344692431)
-#define kUmaBoneLeftToeHash       (-1258743979)
-#define kUmaBoneRightLegUpperHash (952826536)
-#define kUmaBoneRightLegHash      (1082519766)
-#define kUmaBoneRightAnkleHash    (-115488425)
-#define kUmaBoneRightToeHash      (1179749304)
+#define kMagReleaseMilliseconds  200    // Magnet release delay
+#define kColliderManagedOffset       0xAB0 // Player: CapsuleCollider managed reference
+#define kColliderNativePointerOffset 0x10 // Component: native pointer
+#define kColliderRadiusOffset        0x80 // Native CapsuleCollider: radius
+#define kColliderHeightOffset        0x84 // Native CapsuleCollider: height
+#define kColliderBoostRadiusValue     7.00f // Magnet collider tuning
+#define kColliderBoostHeightValue    14.00f // Magnet collider tuning
+#define kNoRecoilOriginalValue    1016018816U // Legacy scan original value
+#define kNoRecoilModifiedValue    180U // Legacy scan active value
+#define kNoRecoilScanStartAddress 0x100000000ULL // External scan lower bound
+#define kNoRecoilScanEndAddress   0x4000000000ULL // External scan upper bound

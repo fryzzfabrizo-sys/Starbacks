@@ -747,6 +747,7 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
 
     const float aimFovSq  = (isAimbot || aimsilent1) ? aimFov * aimFov : 0.0f;
     const uint64_t base   = entriesArr + kIl2CppArrayItems;
+    const uint64_t magnetLockedTarget = (aimsilent1 ? GetMagnetLockedTarget() : 0);
 
     for (int i = 0; i < slotCap; i++) {
         uint64_t ent = base + (uint64_t)kDictEntryStrideBytePlayer * (uint64_t)i;
@@ -806,7 +807,9 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
                     if ((aimsilent1) && !isAimbot) {
                         // Silent: ближайший к центру экрана среди тех кто СПЕРЕДИ
                         float score;
-                        if (onScreen) {
+                        if (magnetLockedTarget == pawn) {
+                            score = -FLT_MAX;
+                        } else if (onScreen) {
                             float dx = w2s.x - center.x;
                             float dy = w2s.y - center.y;
                             score = dx * dx + dy * dy;

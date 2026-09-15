@@ -220,6 +220,10 @@ void RunAimMagnet(uint64_t target, Vector3 camPos, Vector3 camForward, bool enab
     ApplyMagnet(mag_locked, camPos, camForward);
 }
 
+uint64_t GetMagnetLockedTarget() {
+    return mag_locked;
+}
+
 void ResetAimMagnet() {
     mag_hasData.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lk(mag_lock);
