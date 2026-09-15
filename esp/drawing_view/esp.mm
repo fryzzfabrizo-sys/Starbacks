@@ -151,7 +151,7 @@ static const NSUInteger kMaxTextLayerPoolSize = 128;
 static uint64_t s_memoryAttributes = 0;
 static bool s_memoryAttributesSaved = false;
 static bool s_originalNoReload = false;
-static float s_originalRunSpeed = 1.0f;
+static float s_originalFastFire = 1.0f;
 
 static void RestoreMemoryFeatures(void) {
     if (!s_memoryAttributesSaved || !isVaildPtr(s_memoryAttributes)) return;
@@ -177,13 +177,13 @@ static void ApplyMemoryFeatures(uint64_t player) {
 
     if (!s_memoryAttributesSaved) {
         s_originalNoReload = ReadAddr<bool>(attributes + kShootNoReload);
-        s_originalRunSpeed = ReadAddr<float>(attributes + kPlayerRunSpeedScale);
-        if (!std::isfinite(s_originalRunSpeed) || s_originalRunSpeed <= 0.0f || s_originalRunSpeed > 100.0f) s_originalRunSpeed = 1.0f;
+        s_originalFastFire = ReadAddr<float>(attributes + kFastFireOffset);
+        if (!std::isfinite(s_originalFastFire) || s_originalFastFire <= 0.0f || s_originalFastFire > 100.0f) s_originalFastFire = 1.0f;
         s_memoryAttributesSaved = true;
     }
 
     WriteAddr<bool>(attributes + kShootNoReload, isNoReload ? true : s_originalNoReload);
-    WriteAddr<float>(attributes + kPlayerRunSpeedScale, isFastFire ? kFastFirePlayerSpeedValue : s_originalRunSpeed);
+    WriteAddr<float>(attributes + kFastFireOffset, isFastFire ? kFastFireValue : s_originalFastFire);
 }
 
 static uint64_t cachedMatchGame  = 0;

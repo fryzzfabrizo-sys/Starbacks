@@ -151,6 +151,7 @@
 #define kNoRecoilOriginalValue    1016018816U // Legacy scan original value
 #define kNoRecoilModifiedValue    180U // Legacy scan active value
 #define kPlayerRunSpeedScale      0x270  // OB54 PlayerAttributes.RunSpeedUpScale; OB54dump.cs PlayerAttributes field 0x270
-#define kFastFirePlayerSpeedValue 1.90f  // Runtime value used by the Fast Fire compatibility toggle
+#define kFastFireOffset           0x208  // OB54 PlayerAttributes fire-interval scale field; PlayerAttributes, OB54dump.cs 0x208
+#define kFastFireValue             0.20f  // Lower interval scale means faster fire; restored on disable
 #define kNoRecoilScanStartAddress 0x100000000ULL // External scan lower bound
 #define kNoRecoilScanEndAddress   0x4000000000ULL // External scan upper bound
