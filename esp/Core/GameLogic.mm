@@ -55,7 +55,7 @@ bool getIsVisible(uint64_t playerPawn) {
     uint64_t umaAvatar = ReadAddr<uint64_t>(avatarMgr + _0x28726BD);
     if (umaAvatar < 0x100000000ULL || umaAvatar > 0x0000FFFFFFFFFFFFULL) return true;
 
-    return ReadAddr<bool>(umaAvatar + kIsVisible_Uma);
+    return ReadAddr<bool>(umaAvatar + _0x2872DCF);
 }
 
 static void TipaReadMatrix16(uint64_t addr, float *out) {

@@ -97,6 +97,7 @@ void ESPSyncFromPrefs(void) {
     isAimbot          = ESPPrefsBool(NSSENCRYPT("Aimbot"),          NO);
 
     isNoReload = ESPPrefsBool(NSSENCRYPT("NoReload"), NO);
+    isFastFire = ESPPrefsBool(NSSENCRYPT("FastFire"), NO);
     isWallCheck = ESPPrefsBool(NSSENCRYPT("WallCheck"), NO);
 
     isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
