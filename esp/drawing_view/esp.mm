@@ -4,8 +4,6 @@
 #import "../UMA/UMASkeleton.h"
 #import "mahoa.h"
 #import "../../sources/silent.h"
-#import "../../sources/no_recoil.h"
-#import "../../sources/no_recoil.h"
 #import "../../sources/magnet.h"
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
@@ -38,7 +36,6 @@ bool testGhost = NO;
 bool dunhanh = NO;
 
 bool isNoReload    = NO;
-bool isNoRecoil    = NO;
 bool isFastFire    = NO;
 
 bool isShowFov = NO;
@@ -99,7 +96,6 @@ void ESPSyncFromPrefs(void) {
     isAimbot          = ESPPrefsBool(NSSENCRYPT("Aimbot"),          NO);
 
     isNoReload = ESPPrefsBool(NSSENCRYPT("NoReload"), NO);
-    isNoRecoil = ESPPrefsBool(NSSENCRYPT("NoRecoil"), NO);
     isFastFire = ESPPrefsBool(NSSENCRYPT("FastFire"), NO);
 
     isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
@@ -468,7 +464,6 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
         }
 
         if (IsAtLobby(Moudule_Base)) {
-            NoRecoilSetEnabled(false);
             ResetMemoryFeatureState();
             cachedMatchGame = 0;
             cachedMatch = 0;
@@ -655,11 +650,11 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneNeckHash, kUmaBoneSpineHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpineHash, kUmaBoneSpine1Hash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpine1Hash, kUmaBoneHipsHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpine1Hash, kUmaBoneLeftClavHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneNeckHash, kUmaBoneLeftClavHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftClavHash, kUmaBoneLeftArmHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftArmHash, kUmaBoneLeftForeArmHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftForeArmHash, kUmaBoneLeftHandHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpine1Hash, kUmaBoneRightClavHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneNeckHash, kUmaBoneRightClavHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightClavHash, kUmaBoneRightArmHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightArmHash, kUmaBoneRightForeArmHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightForeArmHash, kUmaBoneRightHandHash);
@@ -695,7 +690,6 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
     if (!isVaildPtr(myPawn) || get_CurHP(myPawn) <= 0) return stats;
 
     stats.inMatch = true;
-    NoRecoilSetEnabled(isNoRecoil);
     ApplyMemoryFeatures(myPawn);
 
     if (camcao) {
