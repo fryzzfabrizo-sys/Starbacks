@@ -464,6 +464,7 @@ static void ESPTextCallback(void *ctx, NSString *str, CGRect frame, UIColor *col
         }
 
         if (IsAtLobby(Moudule_Base)) {
+            UMAExternal::clearCache();
             ResetMemoryFeatureState();
             cachedMatchGame = 0;
             cachedMatch = 0;
@@ -631,41 +632,31 @@ static inline bool UMAFinitePoint(const Vector3& point) {
     return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
 }
 
-static void AppendUMALine(ESPGeometryBuffers *buffers, uint64_t pawn, float *matrix,
-                          CGFloat vpW, CGFloat vpH, CGFloat layerW, CGFloat layerH,
-                          int32_t a, int32_t b) {
-    Vector3 worldA{}, worldB{};
-    if (!UMAExternal::position(pawn, a, &worldA) || !UMAExternal::position(pawn, b, &worldB)) return;
-    Vector3 screenA = WorldToScreenLayer(worldA, matrix, vpW, vpH, layerW, layerH);
-    Vector3 screenB = WorldToScreenLayer(worldB, matrix, vpW, vpH, layerW, layerH);
-    if (screenA.z <= 0.001f || screenB.z <= 0.001f || !UMAFinitePoint(screenA) || !UMAFinitePoint(screenB)) return;
-    CGPathMoveToPoint(buffers->bonePath, NULL, screenA.x, screenA.y);
-    CGPathAddLineToPoint(buffers->bonePath, NULL, screenB.x, screenB.y);
-    buffers->boneDirty = true;
-}
-
 static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float *matrix,
                               CGFloat vpW, CGFloat vpH, CGFloat layerW, CGFloat layerH) {
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneHeadHash, kUmaBoneNeckHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneNeckHash, kUmaBoneSpineHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpineHash, kUmaBoneSpine1Hash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpine1Hash, kUmaBoneHipsHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneNeckHash, kUmaBoneLeftClavHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftClavHash, kUmaBoneLeftArmHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftArmHash, kUmaBoneLeftForeArmHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftForeArmHash, kUmaBoneLeftHandHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneNeckHash, kUmaBoneRightClavHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightClavHash, kUmaBoneRightArmHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightArmHash, kUmaBoneRightForeArmHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightForeArmHash, kUmaBoneRightHandHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneHipsHash, kUmaBoneLeftLegUpperHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftLegUpperHash, kUmaBoneLeftLegHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftLegHash, kUmaBoneLeftAnkleHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftAnkleHash, kUmaBoneLeftToeHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneHipsHash, kUmaBoneRightLegUpperHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightLegUpperHash, kUmaBoneRightLegHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightLegHash, kUmaBoneRightAnkleHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightAnkleHash, kUmaBoneRightToeHash);
+    static constexpr int kBoneCount = 21;
+    static const uint8_t edges[][2] = {
+        {0, 1}, {1, 2}, {2, 3}, {3, 4},
+        {1, 5}, {5, 6}, {6, 7}, {7, 8},
+        {1, 9}, {9, 10}, {10, 11}, {11, 12},
+        {4, 13}, {13, 14}, {14, 15}, {15, 16},
+        {4, 17}, {17, 18}, {18, 19}, {19, 20},
+    };
+
+    std::array<Vector3, kBoneCount> world{};
+    if (!UMAExternal::readPositions(pawn, &world)) return;
+    std::array<Vector3, kBoneCount> screen{};
+    std::array<bool, kBoneCount> visible{};
+    for (int i = 0; i < kBoneCount; i++) {
+        screen[i] = WorldToScreenLayer(world[i], matrix, vpW, vpH, layerW, layerH);
+        visible[i] = screen[i].z > 0.001f && UMAFinitePoint(screen[i]);
+    }
+    for (const auto &edge : edges) {
+        if (!visible[edge[0]] || !visible[edge[1]]) continue;
+        CGPathMoveToPoint(buffers->bonePath, NULL, screen[edge[0]].x, screen[edge[0]].y);
+        CGPathAddLineToPoint(buffers->bonePath, NULL, screen[edge[1]].x, screen[edge[1]].y);
+        buffers->boneDirty = true;
+    }
 }
 
 - (ESPFrameStats)renderESPWithBuffers:(ESPGeometryBuffers *)buffers
