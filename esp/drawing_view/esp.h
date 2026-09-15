@@ -59,7 +59,6 @@ extern bool isEspBot;
 extern bool isWeapon;
 extern bool isAimIgnoreBot;
 extern bool isAimIgnoreKnock;
-extern bool isAimCheckVisible;
 extern bool isAimRage;
 extern bool isLineAim;
 

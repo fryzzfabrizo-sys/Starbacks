@@ -37,7 +37,6 @@ bool dunhanh = NO;
 
 bool isNoReload    = NO;
 bool isFastFire   = NO;
-bool isWallCheck   = NO;
 
 bool isShowFov = NO;
 
@@ -50,7 +49,6 @@ uint64_t g_SilentBestTarget = 0;
 bool isAimbot          = NO;
 bool isAimIgnoreBot    = NO;
 bool isAimIgnoreKnock  = NO;
-bool isAimCheckVisible = NO;
 bool isAimRage         = NO;
 bool isLineAim         = YES;
 
@@ -91,7 +89,6 @@ void ESPSyncFromPrefs(void) {
     BackJump = ESPPrefsBool(NSSENCRYPT("BackJump"), NO);
     isAimIgnoreBot    = ESPPrefsBool(NSSENCRYPT("AimIgnoreBot"),    NO);
     isAimIgnoreKnock  = ESPPrefsBool(NSSENCRYPT("AimIgnoreKnock"), NO);
-    isAimCheckVisible = ESPPrefsBool(NSSENCRYPT("AimCheckVisible"), NO);
     isAimRage         = ESPPrefsBool(NSSENCRYPT("AimRage"),         NO);
     isLineAim         = ESPPrefsBool(NSSENCRYPT("LineAim"),         YES);
     isAimbot          = ESPPrefsBool(NSSENCRYPT("Aimbot"),          NO);
