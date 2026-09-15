@@ -796,8 +796,6 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
                     // dot >= 0.5 ≈ 60° конус впереди. Меняй на 0.3 (72°) или 0.7 (45°)
                     if (dot >= 0.5f) facingTarget = true;
                 }
-                if (!facingTarget) goto next_pawn;
-
                 Vector3 w2s = WorldToScreenLayer(aimPos, matrix, (float)screenVpW, (float)screenVpH, (float)vw, (float)vh);
                 bool onScreen = (w2s.z > 0.001f);
 
@@ -813,13 +811,9 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
                             float dx = w2s.x - center.x;
                             float dy = w2s.y - center.y;
                             score = dx * dx + dy * dy;
+                            if (!facingTarget) score += 1e12f;
                         } else {
-                            // Впереди, но не на экране — большой штраф, но всё же кандидат
-                            float inv = 1.0f / toTargetLen;
-                            float dot = (toTarget.x * camFwd.x +
-                                         toTarget.y * camFwd.y +
-                                         toTarget.z * camFwd.z) * inv;
-                            score = 1e9f + (1.0f - dot) * 1e6f;
+                            score = 1e9f + (facingTarget ? 0.0f : 1e8f);
                         }
                         if (score < bestScore) {
                             bestScore    = score;
