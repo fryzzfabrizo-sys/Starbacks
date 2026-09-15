@@ -784,8 +784,9 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
         Vector3 aimPos   = headPos;
         bool    isBot    = get_IsBot(pawn);
         bool    isKnocked = get_IsKnockedDown(pawn);
-        bool    aimVis   = true;
-        bool    espVis   = true;
+        bool    aimVis   = getIsVisible(pawn);
+        bool    espVis   = aimVis || isKnocked;
+        if (!espVis) continue;
 
         if ((isAimbot || aimsilent1 || aimMagnet) && dis <= aimDistance) {
             BOOL valid = YES;
