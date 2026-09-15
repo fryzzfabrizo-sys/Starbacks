@@ -655,10 +655,12 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneNeckHash, kUmaBoneSpineHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpineHash, kUmaBoneSpine1Hash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpine1Hash, kUmaBoneHipsHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpine1Hash, kUmaBoneLeftArmHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpine1Hash, kUmaBoneLeftClavHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftClavHash, kUmaBoneLeftArmHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftArmHash, kUmaBoneLeftForeArmHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneLeftForeArmHash, kUmaBoneLeftHandHash);
-    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpine1Hash, kUmaBoneRightArmHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneSpine1Hash, kUmaBoneRightClavHash);
+    AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightClavHash, kUmaBoneRightArmHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightArmHash, kUmaBoneRightForeArmHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneRightForeArmHash, kUmaBoneRightHandHash);
     AppendUMALine(buffers, pawn, matrix, vpW, vpH, layerW, layerH, kUmaBoneHipsHash, kUmaBoneLeftLegUpperHash);

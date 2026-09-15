@@ -116,6 +116,8 @@
 #define kUmaBoneHipsHash          (1529948125)  // BaseBoneMale_Mesh asset: bone_Hips
 #define kUmaBoneSpineHash         (-1051086991) // BaseBoneMale_Mesh asset: bone_Spine
 #define kUmaBoneSpine1Hash        (-1541408846) // BaseBoneMale_Mesh asset: bone_Spine1
+#define kUmaBoneLeftClavHash      (-617253997)  // BaseBoneMale_Mesh asset: bone_LeftClav
+#define kUmaBoneRightClavHash     (92030410)    // BaseBoneMale_Mesh asset: bone_RightClav
 #define kUmaBoneLeftArmHash       (1604555488)  // BaseBoneMale_Mesh asset: bone_LeftArm
 #define kUmaBoneLeftForeArmHash   (-1129867206) // BaseBoneMale_Mesh asset: bone_LeftForeArm
 #define kUmaBoneLeftHandHash      (1892485702)  // BaseBoneMale_Mesh asset: bone_LeftHand
