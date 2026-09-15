@@ -46,16 +46,12 @@ uint64_t CameraMain(uint64_t matchgame) {
 }
 
 bool getIsVisible(uint64_t playerPawn) {
-    if (!isVaildPtr(playerPawn)) return false;
-    if (get_CurHP(playerPawn) <= 0) return false;
-
-    uint64_t avatarMgr = ReadAddr<uint64_t>(playerPawn + _0x27276BC);
-    if (avatarMgr < 0x100000000ULL || avatarMgr > 0x0000FFFFFFFFFFFFULL) return true;
-
-    uint64_t umaAvatar = ReadAddr<uint64_t>(avatarMgr + _0x28726BD);
-    if (umaAvatar < 0x100000000ULL || umaAvatar > 0x0000FFFFFFFFFFFFULL) return true;
-
-    return ReadAddr<bool>(umaAvatar + kIsVisible_Uma);
+    if (playerPawn == 0) return false;
+    uint64_t avatarManager = ReadAddr<uint64_t>(playerPawn + _0x27276BC);
+    if (avatarManager == 0) return false;
+    uint64_t umaAvatar = ReadAddr<uint64_t>(avatarManager + _0x28726BD);
+    if (umaAvatar == 0) return false;
+    return ReadAddr<bool>(umaAvatar + _0x2872DCF);
 }
 
 static void TipaReadMatrix16(uint64_t addr, float *out) {

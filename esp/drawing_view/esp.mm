@@ -792,6 +792,7 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
+            if (!aimVis)                         valid = NO;
 
             if (valid) {
                 // ── ФИЛЬТР: цель должна быть ВПЕРЕДИ камеры (не сзади, не сбоку) ──
