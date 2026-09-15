@@ -98,7 +98,6 @@ void ESPSyncFromPrefs(void) {
 
     isNoReload = ESPPrefsBool(NSSENCRYPT("NoReload"), NO);
     isFastFire = ESPPrefsBool(NSSENCRYPT("FastFire"), NO);
-    isWallCheck = ESPPrefsBool(NSSENCRYPT("WallCheck"), NO);
 
     isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
     aimsilent1 = ESPPrefsBool(NSSENCRYPT("SilentAim"), NO);
@@ -783,16 +782,13 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
         Vector3 aimPos   = headPos;
         bool    isBot    = get_IsBot(pawn);
         bool    isKnocked = get_IsKnockedDown(pawn);
-        bool    aimVis   = getIsVisible(pawn);
-        bool    espVis   = aimVis || isKnocked;
-        if (!espVis) continue;
+        bool    aimVis   = true;
+        bool    espVis   = true;
 
         if ((isAimbot || aimsilent1 || aimMagnet) && dis <= aimDistance) {
             BOOL valid = YES;
             if (isAimIgnoreBot    && isBot)      valid = NO;
             if (isAimIgnoreKnock  && isKnocked)  valid = NO;
-            if (!isAimCheckVisible && !aimVis && !aimMagnet) valid = NO;
-            if (isWallCheck && !aimVis) valid = NO;
 
             if (valid) {
                 // ── ФИЛЬТР: цель должна быть ВПЕРЕДИ камеры (не сзади, не сбоку) ──
