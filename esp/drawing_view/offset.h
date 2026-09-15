@@ -88,6 +88,10 @@
 #define kHit_RayDirectionOffset 0x40    // HitInfo: direction
 #define kHit_StartPositionOffset 0x4C   // HitInfo: startPosition
 #define kHit_Scatter             0x5C   // HitInfo/GMPGMPFNMFP: scatter
+#define kSilentBodyPartTransformOffset kBodyPartTransNode // Player body-part: ITransformNode at BodyPart+0x10
+#define kSilentHeadNodeOffset         kHeadNode          // Player: head ITransformNode at 0x638
+#define kHitStartPositionOffset       kHit_StartPositionOffset // HitInfo: startPosition at 0x4C
+#define kHitRayDirectionOffset        kHit_RayDirectionOffset  // HitInfo: ray direction at 0x40
 
 // ─── Raw external UMA skeleton ─────────────────────────────────────────────
 #define kUmaAvatarManagerOffset 0x708  // Player: AvatarManager m_AvatarManager
