@@ -156,7 +156,7 @@ static float s_originalFastFire = 1.0f;
 static void RestoreMemoryFeatures(void) {
     if (!s_memoryAttributesSaved || !isVaildPtr(s_memoryAttributes)) return;
     WriteAddr<bool>(s_memoryAttributes + kShootNoReload, s_originalNoReload);
-    WriteAddr<float>(s_memoryAttributes + kPlayerRunSpeedScale, s_originalRunSpeed);
+    WriteAddr<float>(s_memoryAttributes + kFastFireOffset, s_originalFastFire);
 }
 
 static void ResetMemoryFeatureState(void) {
