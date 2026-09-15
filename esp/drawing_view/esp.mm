@@ -769,13 +769,18 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
         int hp = get_CurHP(pawn);
         if (hp <= 0) continue;
 
-        Vector3 footPos = getPositionExt(getHip(pawn));
-        if (IsZeroVec(footPos)) continue;
+        uint64_t hipTransform = getHip(pawn);
+        uint64_t headTransform = getHead(pawn);
+        if (!isVaildPtr(hipTransform) || !isVaildPtr(headTransform)) continue;
+
+        Vector3 footPos = getPositionExt(hipTransform);
+        Vector3 headPos  = getPositionExt(headTransform);
+        if (IsZeroVec(footPos) || IsZeroVec(headPos)) continue;
+        if (!isfinite(footPos.x) || !isfinite(footPos.y) || !isfinite(footPos.z)) continue;
+        if (!isfinite(headPos.x) || !isfinite(headPos.y) || !isfinite(headPos.z)) continue;
 
         float dis = Vector3::Distance(myLoc, footPos);
         if (dis > 500.0f) continue;
-
-        Vector3 headPos  = getPositionExt(getHead(pawn));
         Vector3 aimPos   = headPos;
         bool    isBot    = get_IsBot(pawn);
         bool    isKnocked = get_IsKnockedDown(pawn);

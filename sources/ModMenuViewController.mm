@@ -656,8 +656,7 @@ typedef NS_ENUM(NSInteger, MenuTab) {
         @[ @"Auto Aimbot", @"Aimbot" ],
         @[ @"Silent Aim", @"SilentAim" ],
         @[ @"Ignore Bot", @"AimIgnoreBot" ],
-        @[ @"Ignore Knocked", @"AimIgnoreKnock" ],
-        @[ @"Visible Check", @"AimCheckVisible" ]
+        @[ @"Ignore Knocked", @"AimIgnoreKnock" ]
     ];
 
     if (tab == MenuTabAimbot) {
