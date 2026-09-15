@@ -62,7 +62,7 @@ void NoRecoilSetEnabled(bool enabled) {
         std::lock_guard<std::mutex> lock(g_noRecoilLock);
         uint32_t originalValue = kNoRecoilOriginalValue;
         for (mach_vm_address_t address : g_noRecoilResults)
-            _write((long)address, &originalValue, sizeof(originalValue));
+            mach_vm_write(mach_task_self(), address, (pointer_t)&originalValue, sizeof(originalValue));
         g_noRecoilResults.clear();
         return;
     }
@@ -83,7 +83,7 @@ void NoRecoilSetEnabled(bool enabled) {
                 g_noRecoilResults = results;
                 uint32_t modified = kNoRecoilModifiedValue;
                 for (mach_vm_address_t address : g_noRecoilResults) {
-                    _write((long)address, &modified, sizeof(modified));
+                    mach_vm_write(mach_task_self(), address, (pointer_t)&modified, sizeof(modified));
                 }
             }
         }

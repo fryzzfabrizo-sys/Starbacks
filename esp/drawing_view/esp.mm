@@ -39,6 +39,7 @@ bool dunhanh = NO;
 
 bool isNoReload    = NO;
 bool isNoRecoil    = NO;
+bool isFastFire    = NO;
 
 bool isShowFov = NO;
 
@@ -99,6 +100,7 @@ void ESPSyncFromPrefs(void) {
 
     isNoReload = ESPPrefsBool(NSSENCRYPT("NoReload"), NO);
     isNoRecoil = ESPPrefsBool(NSSENCRYPT("NoRecoil"), NO);
+    isFastFire = ESPPrefsBool(NSSENCRYPT("FastFire"), NO);
 
     isShowFov = ESPPrefsBool(NSSENCRYPT("ShowFov"), NO);
     aimsilent1 = ESPPrefsBool(NSSENCRYPT("SilentAim"), NO);
@@ -173,10 +175,13 @@ static void ApplyMemoryFeatures(uint64_t player) {
 
     if (!s_memoryAttributesSaved) {
         s_originalNoReload = ReadAddr<bool>(attributes + kShootNoReload);
+        s_originalRunSpeed = ReadAddr<float>(attributes + kPlayerRunSpeedScale);
+        if (!std::isfinite(s_originalRunSpeed) || s_originalRunSpeed <= 0.0f || s_originalRunSpeed > 100.0f) s_originalRunSpeed = 1.0f;
         s_memoryAttributesSaved = true;
     }
 
     WriteAddr<bool>(attributes + kShootNoReload, isNoReload ? true : s_originalNoReload);
+    WriteAddr<float>(attributes + kPlayerRunSpeedScale, isFastFire ? kFastFirePlayerSpeedValue : s_originalRunSpeed);
 }
 
 static uint64_t cachedMatchGame  = 0;
