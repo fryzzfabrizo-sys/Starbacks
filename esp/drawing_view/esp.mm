@@ -150,6 +150,9 @@ static uint64_t s_memoryAttributes = 0;
 static bool s_memoryAttributesSaved = false;
 static bool s_originalNoReload = false;
 static float s_originalFireIntervalScale = 1.0f;
+static float s_originalFireIntervalScaleSkill = 1.0f;
+static float s_originalFireIntervalScaleMove = 1.0f;
+static float s_originalFireIntervalScaleTwo = 1.0f;
 static bool s_originalFireIntervalScaleValid = false;
 
 static void RestoreMemoryFeatures(void) {
@@ -157,6 +160,9 @@ static void RestoreMemoryFeatures(void) {
     WriteAddr<bool>(s_memoryAttributes + kShootNoReload, s_originalNoReload);
     if (s_originalFireIntervalScaleValid) {
         WriteAddr<float>(s_memoryAttributes + kFastFireIntervalScaleOffset, s_originalFireIntervalScale);
+        WriteAddr<float>(s_memoryAttributes + kFastFireIntervalScaleSkillOffset, s_originalFireIntervalScaleSkill);
+        WriteAddr<float>(s_memoryAttributes + kFastFireIntervalScaleMoveOffset, s_originalFireIntervalScaleMove);
+        WriteAddr<float>(s_memoryAttributes + kFastFireIntervalScaleTwoOffset, s_originalFireIntervalScaleTwo);
     }
 }
 
@@ -180,13 +186,19 @@ static void ApplyMemoryFeatures(uint64_t player) {
     if (!s_memoryAttributesSaved) {
         s_originalNoReload = ReadAddr<bool>(attributes + kShootNoReload);
         s_originalFireIntervalScale = ReadAddr<float>(attributes + kFastFireIntervalScaleOffset);
-        s_originalFireIntervalScaleValid = isfinite(s_originalFireIntervalScale);
+        s_originalFireIntervalScaleSkill = ReadAddr<float>(attributes + kFastFireIntervalScaleSkillOffset);
+        s_originalFireIntervalScaleMove = ReadAddr<float>(attributes + kFastFireIntervalScaleMoveOffset);
+        s_originalFireIntervalScaleTwo = ReadAddr<float>(attributes + kFastFireIntervalScaleTwoOffset);
+        s_originalFireIntervalScaleValid = isfinite(s_originalFireIntervalScale) && isfinite(s_originalFireIntervalScaleSkill) && isfinite(s_originalFireIntervalScaleMove) && isfinite(s_originalFireIntervalScaleTwo);
         s_memoryAttributesSaved = true;
     }
 
     WriteAddr<bool>(attributes + kShootNoReload, isNoReload ? true : s_originalNoReload);
     if (s_originalFireIntervalScaleValid) {
         WriteAddr<float>(attributes + kFastFireIntervalScaleOffset, isFastFire ? kFastFireIntervalScaleValue : s_originalFireIntervalScale);
+        WriteAddr<float>(attributes + kFastFireIntervalScaleSkillOffset, isFastFire ? kFastFireIntervalScaleValue : s_originalFireIntervalScaleSkill);
+        WriteAddr<float>(attributes + kFastFireIntervalScaleMoveOffset, isFastFire ? kFastFireIntervalScaleValue : s_originalFireIntervalScaleMove);
+        WriteAddr<float>(attributes + kFastFireIntervalScaleTwoOffset, isFastFire ? kFastFireIntervalScaleValue : s_originalFireIntervalScaleTwo);
     }
 }
 

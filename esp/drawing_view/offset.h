@@ -151,6 +151,9 @@
 #define kNoRecoilOriginalValue    1016018816U // Legacy scan original value
 #define kNoRecoilModifiedValue    180U // Legacy scan active value
 #define kFastFireIntervalScaleOffset 0x204 // COW.GamePlay.PlayerAttributes: FireIntervalScale backing field MEKIMJJGFGF; OB54dump.cs PlayerAttributes field 0x204
+#define kFastFireIntervalScaleSkillOffset 0x208 // COW.GamePlay.PlayerAttributes: FireIntervalScaleSkill backing field BONAJJEOPNF; OB54dump.cs PlayerAttributes field 0x208
+#define kFastFireIntervalScaleMoveOffset 0x20C // COW.GamePlay.PlayerAttributes: FireIntervalScaleIncreaseShootAndMoveSpeedSkill backing field FDLNKHLJAAH; OB54dump.cs PlayerAttributes field 0x20C
+#define kFastFireIntervalScaleTwoOffset 0x210 // COW.GamePlay.PlayerAttributes: FireIntervalScaleTwo backing field PNINKHOKJOL; OB54dump.cs PlayerAttributes field 0x210
 #define kFastFireIntervalScaleValue 0.20f
 
 #define kPlayerRunSpeedScale      0x270  // OB54 PlayerAttributes.RunSpeedUpScale; OB54dump.cs PlayerAttributes field 0x270
