@@ -18,8 +18,8 @@ extern uint64_t cachedMatch;
 extern bool     aimsilent1;
 
 // ─── Prediction ──────────────────────────────────────────
-static constexpr float kPredictTimeSec = 0.02f;   // 20мс упреждения
-static constexpr float kMaxVelXZ       = 12.0f;   // м/с — только X/Z
+static constexpr float kPredictTimeSec = 0.02f;
+static constexpr float kMaxVelXZ       = 12.0f;
 
 static std::mutex        g_lock;
 static std::atomic<bool> g_hasData{false};
