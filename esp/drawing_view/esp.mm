@@ -36,6 +36,7 @@ bool testGhost = NO;
 bool dunhanh = NO;
 
 bool isNoReload    = NO;
+bool isFastFire   = NO;
 bool isWallCheck   = NO;
 
 bool isShowFov = NO;
@@ -147,10 +148,15 @@ static const NSUInteger kMaxTextLayerPoolSize = 128;
 static uint64_t s_memoryAttributes = 0;
 static bool s_memoryAttributesSaved = false;
 static bool s_originalNoReload = false;
+static float s_originalFireIntervalScale = 1.0f;
+static bool s_originalFireIntervalScaleValid = false;
 
 static void RestoreMemoryFeatures(void) {
     if (!s_memoryAttributesSaved || !isVaildPtr(s_memoryAttributes)) return;
     WriteAddr<bool>(s_memoryAttributes + kShootNoReload, s_originalNoReload);
+    if (s_originalFireIntervalScaleValid) {
+        WriteAddr<float>(s_memoryAttributes + kFastFireIntervalScaleOffset, s_originalFireIntervalScale);
+    }
 }
 
 static void ResetMemoryFeatureState(void) {
@@ -165,16 +171,22 @@ static void ApplyMemoryFeatures(uint64_t player) {
         RestoreMemoryFeatures();
         s_memoryAttributes = attributes;
         s_memoryAttributesSaved = false;
+        s_originalFireIntervalScaleValid = false;
     }
 
     if (!isVaildPtr(attributes)) return;
 
     if (!s_memoryAttributesSaved) {
         s_originalNoReload = ReadAddr<bool>(attributes + kShootNoReload);
+        s_originalFireIntervalScale = ReadAddr<float>(attributes + kFastFireIntervalScaleOffset);
+        s_originalFireIntervalScaleValid = isfinite(s_originalFireIntervalScale) && s_originalFireIntervalScale > 0.01f && s_originalFireIntervalScale < 10.0f;
         s_memoryAttributesSaved = true;
     }
 
     WriteAddr<bool>(attributes + kShootNoReload, isNoReload ? true : s_originalNoReload);
+    if (s_originalFireIntervalScaleValid) {
+        WriteAddr<float>(attributes + kFastFireIntervalScaleOffset, isFastFire ? kFastFireIntervalScaleValue : s_originalFireIntervalScale);
+    }
 }
 
 static uint64_t cachedMatchGame  = 0;
