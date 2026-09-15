@@ -179,7 +179,7 @@ static void ApplyMemoryFeatures(uint64_t player) {
     if (!s_memoryAttributesSaved) {
         s_originalNoReload = ReadAddr<bool>(attributes + kShootNoReload);
         s_originalFireIntervalScale = ReadAddr<float>(attributes + kFastFireIntervalScaleOffset);
-        s_originalFireIntervalScaleValid = isfinite(s_originalFireIntervalScale) && s_originalFireIntervalScale > 0.01f && s_originalFireIntervalScale < 10.0f;
+        s_originalFireIntervalScaleValid = isfinite(s_originalFireIntervalScale);
         s_memoryAttributesSaved = true;
     }
 
