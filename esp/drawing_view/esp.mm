@@ -852,7 +852,6 @@ static void AppendUMASkeleton(ESPGeometryBuffers *buffers, uint64_t pawn, float 
             }
         }
 
-    next_pawn:
         if (espVis) {
             if (isBot) stats.botCount++;
             else stats.playerCount++;
