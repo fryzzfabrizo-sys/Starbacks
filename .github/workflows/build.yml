@@ -2,9 +2,9 @@ name: Build Extern
 
 on:
   push:
-    branches: [Test]
+    branches: [Stable]
   pull_request:
-    branches: [Test]
+    branches: [Stable]
   workflow_dispatch:
 
 permissions:
